@@ -8,10 +8,10 @@ window.addEventListener('keydown', e => keys[e.key] = true);
 window.addEventListener('keyup', e => keys[e.key] = false);
 
 function update() {
-  if (keys['ArrowLeft'])  player.x -= player.speed;
-  if (keys['ArrowRight']) player.x += player.speed;
-  if (keys['ArrowUp'])    player.y -= player.speed;
-  if (keys['ArrowDown'])  player.y += player.speed;
+  if (keys['a']) player.x -= player.speed;
+  if (keys['d']) player.x += player.speed;
+  if (keys['w']) player.y -= player.speed;
+  if (keys['s']) player.y += player.speed;
 }
 
 function draw() {
