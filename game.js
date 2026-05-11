@@ -7,6 +7,32 @@ const keys = {};
 const projectiles = [];
 let rtWasPressed = false;
 
+const INITIAL_ENEMIES = [
+  { x: 200, y: 150, angle: 0 },
+  { x: 620, y: 200, angle: 0 },
+  { x: 400, y: 460, angle: 0 },
+];
+let enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
+const ENEMY_HIT_RADIUS = 20;
+
+const CORNERS = [
+  { x: 50, y: 50 },
+  { x: 750, y: 50 },
+  { x: 50, y: 550 },
+  { x: 750, y: 550 },
+];
+
+function reset() {
+  const corner = CORNERS[Math.floor(Math.random() * CORNERS.length)];
+  player.x = corner.x;
+  player.y = corner.y;
+  player.angle = 0;
+  projectiles.length = 0;
+  enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
+}
+
+let bWasPressed = false;
+
 window.addEventListener('keydown', e => keys[e.key] = true);
 window.addEventListener('keyup', e => keys[e.key] = false);
 
@@ -55,12 +81,30 @@ function update() {
   }
   rtWasPressed = rtPressed;
 
-  // Move and cull projectiles
+  // B button (button 1) — reset
+  const bPressed = gp?.buttons[1]?.pressed ?? false;
+  if (bPressed && !bWasPressed) reset();
+  bWasPressed = bPressed;
+
+  // Move, collide, and cull projectiles
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
     p.x += p.vx;
     p.y += p.vy;
-    if (p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height) {
+
+    let hit = false;
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      const e = enemies[j];
+      const dx = p.x - e.x;
+      const dy = p.y - e.y;
+      if (dx * dx + dy * dy <= ENEMY_HIT_RADIUS * ENEMY_HIT_RADIUS) {
+        enemies.splice(j, 1);
+        hit = true;
+        break;
+      }
+    }
+
+    if (hit || p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height) {
       projectiles.splice(i, 1);
     }
   }
@@ -93,6 +137,36 @@ function drawPlayer() {
   ctx.moveTo(0, -28);   // tip
   ctx.lineTo(-7, -18);  // base left
   ctx.lineTo(7, -18);   // base right
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawEnemy(e) {
+  ctx.save();
+  ctx.translate(e.x, e.y);
+  ctx.rotate(e.angle);
+
+  ctx.fillStyle = '#d43a3a';
+  ctx.beginPath();
+  ctx.arc(-18, 0, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(18, 0, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#f55a5a';
+  ctx.beginPath();
+  ctx.arc(0, 0, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(0, -28);
+  ctx.lineTo(-7, -18);
+  ctx.lineTo(7, -18);
   ctx.closePath();
   ctx.fill();
 
@@ -154,6 +228,7 @@ function drawFog() {
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const e of enemies) drawEnemy(e);
   drawProjectiles();
   drawPlayer();
   drawFog();
