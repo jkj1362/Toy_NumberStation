@@ -4,6 +4,8 @@ const ctx = canvas.getContext('2d');
 // x, y = center of character; angle = 0 means facing up
 const player = { x: 400, y: 300, speed: 4, angle: 0 };
 const keys = {};
+const projectiles = [];
+let rtWasPressed = false;
 
 window.addEventListener('keydown', e => keys[e.key] = true);
 window.addEventListener('keyup', e => keys[e.key] = false);
@@ -36,6 +38,31 @@ function update() {
   if (right.x !== 0 || right.y !== 0) {
     // atan2(x, -y) so that stick-up → angle 0 (facing up on screen)
     player.angle = Math.atan2(right.x, -right.y);
+  }
+
+  // RT (button 7) — fire projectile on press (not hold)
+  const rtPressed = gp?.buttons[7]?.pressed ?? false;
+  if (rtPressed && !rtWasPressed) {
+    const dx = Math.sin(player.angle);
+    const dy = -Math.cos(player.angle);
+    projectiles.push({
+      x: player.x + dx * 20,
+      y: player.y + dy * 20,
+      vx: dx * 25,
+      vy: dy * 25,
+      angle: player.angle,
+    });
+  }
+  rtWasPressed = rtPressed;
+
+  // Move and cull projectiles
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height) {
+      projectiles.splice(i, 1);
+    }
   }
 }
 
@@ -72,9 +99,64 @@ function drawPlayer() {
   ctx.restore();
 }
 
+function drawProjectiles() {
+  ctx.strokeStyle = '#ffe066';
+  ctx.lineWidth = 2;
+  for (const p of projectiles) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(0, 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+const fogCanvas = document.createElement('canvas');
+const fogCtx = fogCanvas.getContext('2d');
+
+function drawFog() {
+  const PROXIMITY_RADIUS = 50;
+  // Diagonal covers the entire canvas from any player position
+  const VISION_RADIUS = Math.hypot(canvas.width, canvas.height);
+
+  if (fogCanvas.width !== canvas.width || fogCanvas.height !== canvas.height) {
+    fogCanvas.width = canvas.width;
+    fogCanvas.height = canvas.height;
+  }
+
+  // Fill fog layer solid dark
+  fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
+  fogCtx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  fogCtx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+
+  // Cut out visible areas by erasing from the fog layer
+  fogCtx.globalCompositeOperation = 'destination-out';
+
+  // Front semicircle (full canvas reach)
+  fogCtx.beginPath();
+  fogCtx.moveTo(player.x, player.y);
+  fogCtx.arc(player.x, player.y, VISION_RADIUS, player.angle - Math.PI, player.angle);
+  fogCtx.closePath();
+  fogCtx.fill();
+
+  // Proximity circle — always visible regardless of facing direction
+  fogCtx.beginPath();
+  fogCtx.arc(player.x, player.y, PROXIMITY_RADIUS, 0, Math.PI * 2);
+  fogCtx.fill();
+
+  fogCtx.globalCompositeOperation = 'source-over';
+
+  ctx.drawImage(fogCanvas, 0, 0);
+}
+
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawProjectiles();
   drawPlayer();
+  drawFog();
 }
 
 function loop() {
