@@ -2,7 +2,7 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 // x, y = center of character; angle = 0 means facing up
-const player = { x: 400, y: 300, speed: 4, angle: 0 };
+const player = { x: 400, y: 300, speed: 4, angle: 0, targetAngle: 0 };
 const keys = {};
 const projectiles = [];
 let rtWasPressed = false;
@@ -15,18 +15,21 @@ const INITIAL_ENEMIES = [
 let enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
 const ENEMY_HIT_RADIUS = 20;
 
-const CORNERS = [
-  { x: 50, y: 50 },
-  { x: 750, y: 50 },
-  { x: 50, y: 550 },
-  { x: 750, y: 550 },
+const PLAYER_RADIUS = 28; // outermost extent of the character shape
+const CORNERS = () => [
+  { x: PLAYER_RADIUS, y: PLAYER_RADIUS },
+  { x: canvas.width - PLAYER_RADIUS, y: PLAYER_RADIUS },
+  { x: PLAYER_RADIUS, y: canvas.height - PLAYER_RADIUS },
+  { x: canvas.width - PLAYER_RADIUS, y: canvas.height - PLAYER_RADIUS },
 ];
 
 function reset() {
-  const corner = CORNERS[Math.floor(Math.random() * CORNERS.length)];
+  const corners = CORNERS();
+  const corner = corners[Math.floor(Math.random() * corners.length)];
   player.x = corner.x;
   player.y = corner.y;
   player.angle = 0;
+  player.targetAngle = 0;
   projectiles.length = 0;
   enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
 }
@@ -37,6 +40,13 @@ window.addEventListener('keydown', e => keys[e.key] = true);
 window.addEventListener('keyup', e => keys[e.key] = false);
 
 const DEADZONE = 0.15;
+
+function lerpAngle(current, target, t) {
+  let diff = target - current;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return current + diff * t;
+}
 
 function readStick(gp, axisX, axisY) {
   if (!gp) return { x: 0, y: 0 };
@@ -59,12 +69,16 @@ function update() {
   player.x += left.x * player.speed;
   player.y += left.y * player.speed;
 
-  // R-stick rotation (axes 2, 3) — directly sets facing direction
+  // Clamp player inside canvas
+  player.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width  - PLAYER_RADIUS, player.x));
+  player.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, player.y));
+
+  // R-stick rotation (axes 2, 3) — updates target, angle lerps toward it
   const right = readStick(gp, 2, 3);
   if (right.x !== 0 || right.y !== 0) {
-    // atan2(x, -y) so that stick-up → angle 0 (facing up on screen)
-    player.angle = Math.atan2(right.x, -right.y);
+    player.targetAngle = Math.atan2(right.x, -right.y);
   }
+  player.angle = lerpAngle(player.angle, player.targetAngle, 0.18);
 
   // RT (button 7) — fire projectile on press (not hold)
   const rtPressed = gp?.buttons[7]?.pressed ?? false;
