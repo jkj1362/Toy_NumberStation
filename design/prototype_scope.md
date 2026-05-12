@@ -30,17 +30,18 @@ All day-cycle systems (cipher decoding, NPC interaction, gauges) come later. The
 | 3 killable static enemies | ✅ Done |
 | Canvas bounds + reset (B button) | ✅ Done |
 
-## What Comes Next (Feature by Feature)
+## Feature Build Order
 
-The user drives the order. Likely candidates based on the FDD:
-
-- Facility walls and rooms (hardcoded)
-- Enemy patrol routes
-- Enemy sight detection (FOV + range + line-of-sight)
-- Sound detection (gunshot radius, running noise)
-- Objective pickup + exfil point
-- Enemy AI state machine (PATROLLING → ALERT → SEARCHING)
-- Walk vs. run (speed + noise tradeoff)
+| # | Feature | Notes |
+|---|---------|-------|
+| 1 | **Walls & Rooms** | Geometry first — walls, doors, windows. Canvas border = building perimeter. Interior walls divide the floor into rooms. See `feature_01_walls_lighting.md` |
+| 2 | **Lighting** | Built together with walls. Light sources per room; darkness layer; player visibility integration. See `feature_01_walls_lighting.md` |
+| 3 | **Objective Pickup & Exfil** | Interact key to collect item in objective room. Two exfil options: original start point or alternative exfil room |
+| 4 | **Enemy Sight Detection** | FOV arc + range + line-of-sight through walls. Light level affects detection range |
+| 5 | **Enemy Sound Detection** | Sound radius per action (gunshot, run, walk). Enemies react to sounds through walls |
+| 6 | **Enemy Movement & Patrol** | Waypoint patrol routes. Enemies navigate through doorways |
+| 7 | **Enemy AI State Machine** | PATROLLING → ALERT → SEARCHING. Guards in CAUTIOUS never fully return to UNAWARE |
+| 8 | **Walk vs. Run + Noise Tradeoff** | Shift = run (faster, louder). Sound radius changes by movement state |
 
 ## Key Design Decisions (From FDD Open Questions)
 
