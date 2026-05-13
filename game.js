@@ -41,6 +41,27 @@ const INITIAL_ENEMIES = [
 let enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
 const ENEMY_HIT_RADIUS = 20;
 
+const LAMP_HIT_RADIUS = 10;
+// Rules: (1) at least one lamp per room, (2) same-wall lamp spacing >= radius
+// Radius = 200. Same-wall gaps: top/corridor-S x-gaps are 380 & 340; lobby N gap is 300. All >= 200.
+const LAMPS = [
+  // Top wall — one per room section, spacing 380 / 340
+  { x: 200, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
+  { x: 580, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
+  { x: 920, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
+  // Corridor wall south face — mirrors top wall, lights lower half of each room
+  { x: 200, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  { x: 580, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  { x: 920, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  // Bottom wall — lights lobby from below, flanking the entry gap (x:430–570), spacing 350
+  { x: 350, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  { x: 700, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  // Entry area — left perimeter wall
+  { x:  18, y: 630, wallSide: 'W', radius: 200, color: '#ffdc96', active: true },
+  // Room F — right perimeter wall
+  { x:1082, y: 590, wallSide: 'E', radius: 200, color: '#ffdc96', active: true },
+];
+
 const PLAYER_RADIUS = 28; // outermost extent of the character shape
 
 function pushOutOfWalls(entity, radius) {
@@ -78,6 +99,7 @@ function reset() {
   player.targetAngle = 0;
   projectiles.length = 0;
   enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
+  for (const lamp of LAMPS) lamp.active = true;
 }
 
 let bWasPressed = false;
@@ -164,6 +186,19 @@ function update() {
         enemies.splice(j, 1);
         hit = true;
         break;
+      }
+    }
+
+    if (!hit) {
+      for (const lamp of LAMPS) {
+        if (!lamp.active) continue;
+        const ldx = p.x - lamp.x;
+        const ldy = p.y - lamp.y;
+        if (ldx * ldx + ldy * ldy <= LAMP_HIT_RADIUS * LAMP_HIT_RADIUS) {
+          lamp.active = false;
+          hit = true;
+          break;
+        }
       }
     }
 
@@ -266,6 +301,9 @@ function drawProjectiles() {
 const fogCanvas = document.createElement('canvas');
 const fogCtx = fogCanvas.getContext('2d');
 
+const lightCanvas = document.createElement('canvas');
+const lightCtx = lightCanvas.getContext('2d');
+
 function drawFog() {
   const PROXIMITY_RADIUS = 50;
   // Diagonal covers the entire canvas from any player position
@@ -301,13 +339,79 @@ function drawFog() {
   ctx.drawImage(fogCanvas, 0, 0);
 }
 
+function drawLamps() {
+  for (const lamp of LAMPS) {
+    ctx.fillStyle = lamp.active ? lamp.color : '#444';
+    ctx.beginPath();
+    ctx.arc(lamp.x, lamp.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawLighting() {
+  const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
+
+  if (lightCanvas.width !== canvas.width || lightCanvas.height !== canvas.height) {
+    lightCanvas.width = canvas.width;
+    lightCanvas.height = canvas.height;
+  }
+
+  lightCtx.clearRect(0, 0, lightCanvas.width, lightCanvas.height);
+  lightCtx.fillStyle = 'rgba(0, 0, 0, 1)';
+  lightCtx.fillRect(0, 0, lightCanvas.width, lightCanvas.height);
+
+  const W = lightCanvas.width, H = lightCanvas.height;
+  lightCtx.globalCompositeOperation = 'destination-out';
+  for (const lamp of LAMPS) {
+    if (!lamp.active) continue;
+    const [odx, ody] = offsets[lamp.wallSide];
+    const cx = lamp.x + odx;
+    const cy = lamp.y + ody;
+
+    // Clip to the half-plane the lamp faces so light can't cross the wall it's on
+    lightCtx.save();
+    lightCtx.beginPath();
+    if      (lamp.wallSide === 'N') lightCtx.rect(0, lamp.y, W, H);
+    else if (lamp.wallSide === 'S') lightCtx.rect(0, 0,      W, lamp.y);
+    else if (lamp.wallSide === 'E') lightCtx.rect(0, 0,      lamp.x, H);
+    else                            lightCtx.rect(lamp.x, 0, W - lamp.x, H);
+    lightCtx.clip();
+
+    const grad = lightCtx.createRadialGradient(cx, cy, 0, cx, cy, lamp.radius);
+    grad.addColorStop(0,    'rgba(255,255,255,1)');
+    grad.addColorStop(0.75, 'rgba(255,255,255,1)');
+    grad.addColorStop(1,    'rgba(255,255,255,0)');
+    lightCtx.fillStyle = grad;
+    lightCtx.beginPath();
+    lightCtx.arc(cx, cy, lamp.radius, 0, Math.PI * 2);
+    lightCtx.fill();
+    lightCtx.restore();
+  }
+
+  // Player emits a small ambient glow — always visible as a light source
+  const pg = lightCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, 80);
+  pg.addColorStop(0,   'rgba(255,255,255,1)');
+  pg.addColorStop(0.4, 'rgba(255,255,255,1)');
+  pg.addColorStop(1,   'rgba(255,255,255,0)');
+  lightCtx.fillStyle = pg;
+  lightCtx.beginPath();
+  lightCtx.arc(player.x, player.y, 80, 0, Math.PI * 2);
+  lightCtx.fill();
+
+  lightCtx.globalCompositeOperation = 'source-over';
+
+  ctx.drawImage(lightCanvas, 0, 0);
+}
+
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawFloor();
   drawWalls();
+  drawLamps();
   for (const e of enemies) drawEnemy(e);
   drawProjectiles();
   drawPlayer();
+  drawLighting();
   drawFog();
 }
 
