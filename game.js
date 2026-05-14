@@ -251,7 +251,7 @@ function update() {
   bWasPressed = bPressed;
 
   // E key / button 0 — interact
-  const ePressed = (keys['e'] ?? false) || (gp?.buttons[0]?.pressed ?? false);
+  const ePressed = (keys['e'] ?? false) || (gp?.buttons[2]?.pressed ?? false); // button 2 = X (face left)
 
   if (gamePhase === 'infiltrate' && !pickup.collected) {
     pickup.visibleToPlayer = inVisionCone(pickup.x, pickup.y);
@@ -585,10 +585,10 @@ function drawLighting() {
     // Clip to the half-plane the lamp faces so light can't cross the wall it's on
     lightCtx.save();
     lightCtx.beginPath();
-    if      (lamp.wallSide === 'N') lightCtx.rect(0, lamp.y, W, H);
-    else if (lamp.wallSide === 'S') lightCtx.rect(0, 0,      W, lamp.y);
-    else if (lamp.wallSide === 'E') lightCtx.rect(0, 0,      lamp.x, H);
-    else                            lightCtx.rect(lamp.x, 0, W - lamp.x, H);
+    if      (lamp.wallSide === 'N') lightCtx.rect(0, lamp.y - 18, W, H);
+    else if (lamp.wallSide === 'S') lightCtx.rect(0, 0,          W, lamp.y + 18);
+    else if (lamp.wallSide === 'E') lightCtx.rect(0, 0,          lamp.x + 18, H);
+    else                            lightCtx.rect(lamp.x - 18, 0, W, H);
     lightCtx.clip();
 
     const grad = lightCtx.createRadialGradient(cx, cy, 0, cx, cy, lamp.radius);
