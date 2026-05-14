@@ -53,6 +53,9 @@ const LAMPS = [
   { x: 200, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   { x: 580, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   { x: 920, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  // Corridor wall south face (lobby side, y=458 = bottom edge of wall) — lights lobby from above
+  { x: 350, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
+  { x: 700, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
   // Bottom wall — lights lobby from below, flanking the entry gap (x:430–570), spacing 350
   { x: 350, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   { x: 700, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
@@ -63,6 +66,79 @@ const LAMPS = [
 ];
 
 const PLAYER_RADIUS = 28; // outermost extent of the character shape
+const VISION_ANGLE = Math.PI * 2 / 3; // 120° total field of view (tune between PI/2 and 5PI/6 for 90°–150°)
+
+const INTERACT_RADIUS = 30;
+const EXFIL_RADIUS    = 40;
+
+// Precomputed wall segments and corners for visibility raycasting (static — walls never move)
+const WALL_SEGMENTS = (() => {
+  const s = [
+    { x1: 0,            y1: 0,             x2: canvas.width,  y2: 0             },
+    { x1: canvas.width, y1: 0,             x2: canvas.width,  y2: canvas.height },
+    { x1: canvas.width, y1: canvas.height, x2: 0,             y2: canvas.height },
+    { x1: 0,            y1: canvas.height, x2: 0,             y2: 0             },
+  ];
+  for (const w of WALLS) {
+    s.push({ x1: w.x,       y1: w.y,       x2: w.x + w.w, y2: w.y       });
+    s.push({ x1: w.x + w.w, y1: w.y,       x2: w.x + w.w, y2: w.y + w.h });
+    s.push({ x1: w.x + w.w, y1: w.y + w.h, x2: w.x,       y2: w.y + w.h });
+    s.push({ x1: w.x,       y1: w.y + w.h, x2: w.x,       y2: w.y       });
+  }
+  return s;
+})();
+
+const WALL_CORNERS = (() => {
+  const seen = new Set(), pts = [];
+  const add = (x, y) => { const k = `${x},${y}`; if (!seen.has(k)) { seen.add(k); pts.push({ x, y }); } };
+  add(0, 0); add(canvas.width, 0); add(canvas.width, canvas.height); add(0, canvas.height);
+  for (const w of WALLS) {
+    add(w.x, w.y); add(w.x + w.w, w.y); add(w.x + w.w, w.y + w.h); add(w.x, w.y + w.h);
+  }
+  return pts;
+})();
+
+// Room centers used for random pickup / exfil placement
+const ROOMS = [
+  { id: 'lobby',    cx: 460, cy: 590, startingSpace: true  },
+  { id: 'room_a',   cx: 200, cy: 229, startingSpace: false },
+  { id: 'corridor', cx: 589, cy: 229, startingSpace: false },
+  { id: 'room_bc',  cx: 930, cy: 229, startingSpace: false },
+  { id: 'room_f',   cx: 991, cy: 590, startingSpace: false },
+];
+
+// Mission state
+let pickup       = { x: 0, y: 0, roomId: '', collected: false, visibleToPlayer: false };
+let exfilPoints  = [];
+let gamePhase    = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete'
+
+function inVisionCone(wx, wy) {
+  const dx = wx - player.x, dy = wy - player.y;
+  if (dx === 0 && dy === 0) return true;
+  const bearing = Math.atan2(dx, -dy);
+  let diff = bearing - player.angle;
+  while (diff >  Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return Math.abs(diff) <= VISION_ANGLE / 2;
+}
+
+function initPickup() {
+  const eligible = ROOMS.filter(r => !r.startingSpace);
+  const room = eligible[Math.floor(Math.random() * eligible.length)];
+  pickup.x = room.cx;
+  pickup.y = room.cy;
+  pickup.roomId = room.id;
+  pickup.collected = false;
+  pickup.visibleToPlayer = false;
+  return room.id;
+}
+
+function initExfil(pickupRoomId) {
+  const eligible = ROOMS.filter(r => !r.startingSpace && r.id !== pickupRoomId);
+  const room = eligible[Math.floor(Math.random() * eligible.length)];
+  exfilPoints[0] = { x: 500, y: 741, type: 'primary',   active: false, discovered: true  };
+  exfilPoints[1] = { x: room.cx, y: room.cy, type: 'secondary', active: false, discovered: false };
+}
 
 function pushOutOfWalls(entity, radius) {
   for (const wall of WALLS) {
@@ -100,9 +176,12 @@ function reset() {
   projectiles.length = 0;
   enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
   for (const lamp of LAMPS) lamp.active = true;
+  gamePhase = 'infiltrate';
+  initExfil(initPickup());
 }
 
 let bWasPressed = false;
+let eWasPressed = false;
 
 window.addEventListener('keydown', e => keys[e.key] = true);
 window.addEventListener('keyup', e => keys[e.key] = false);
@@ -170,6 +249,38 @@ function update() {
   const bPressed = gp?.buttons[1]?.pressed ?? false;
   if (bPressed && !bWasPressed) reset();
   bWasPressed = bPressed;
+
+  // E key / button 0 — interact
+  const ePressed = (keys['e'] ?? false) || (gp?.buttons[0]?.pressed ?? false);
+
+  if (gamePhase === 'infiltrate' && !pickup.collected) {
+    pickup.visibleToPlayer = inVisionCone(pickup.x, pickup.y);
+    for (const ef of exfilPoints) {
+      if (!ef.discovered && inVisionCone(ef.x, ef.y)) ef.discovered = true;
+    }
+    if (ePressed && !eWasPressed) {
+      const dx = player.x - pickup.x, dy = player.y - pickup.y;
+      if (dx * dx + dy * dy <= INTERACT_RADIUS * INTERACT_RADIUS) {
+        pickup.collected = true;
+        gamePhase = 'exfil';
+        for (const ef of exfilPoints) { ef.active = true; ef.discovered = true; }
+      }
+    }
+  }
+
+  if (gamePhase === 'exfil') {
+    for (const ef of exfilPoints) {
+      if (!ef.active) continue;
+      const dx = player.x - ef.x, dy = player.y - ef.y;
+      if (dx * dx + dy * dy <= EXFIL_RADIUS * EXFIL_RADIUS) {
+        gamePhase = 'complete';
+        setTimeout(reset, 1500);
+        break;
+      }
+    }
+  }
+
+  eWasPressed = ePressed;
 
   // Move, collide, and cull projectiles
   for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -298,6 +409,52 @@ function drawProjectiles() {
   }
 }
 
+// Cast a single ray from (px,py) at canvas angle `angle`, return nearest wall hit
+function castVisRay(px, py, angle) {
+  const dx = Math.cos(angle), dy = Math.sin(angle);
+  let minT = Infinity;
+  for (const s of WALL_SEGMENTS) {
+    const ex = s.x2 - s.x1, ey = s.y2 - s.y1;
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-10) continue;
+    const t = ((s.x1 - px) * ey - (s.y1 - py) * ex) / denom;
+    const u = ((s.x1 - px) * dy - (s.y1 - py) * dx) / denom;
+    if (t >= 0 && u >= 0 && u <= 1 && t < minT) minT = t;
+  }
+  return minT === Infinity ? null : { x: px + dx * minT, y: py + dy * minT };
+}
+
+// Build a wall-occluded visibility polygon for the player's vision cone
+function computeVisibilityPolygon(px, py, playerAngle) {
+  const forward = playerAngle - Math.PI / 2;
+  const half    = VISION_ANGLE / 2;
+  const eps     = 0.0001;
+
+  // Cone boundary rays + one ray per visible wall corner (±ε for clean edges)
+  const angles = [forward - half, forward + half];
+  for (const c of WALL_CORNERS) {
+    const a = Math.atan2(c.y - py, c.x - px);
+    let diff = a - forward;
+    while (diff >  Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    if (Math.abs(diff) <= half + eps) {
+      angles.push(a - eps, a, a + eps);
+    }
+  }
+  angles.sort((a, b) => a - b);
+
+  const pts = [];
+  for (const a of angles) {
+    let diff = a - forward;
+    while (diff >  Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    if (Math.abs(diff) > half + eps) continue;
+    const hit = castVisRay(px, py, a);
+    if (hit) pts.push(hit);
+  }
+  return pts;
+}
+
 const fogCanvas = document.createElement('canvas');
 const fogCtx = fogCanvas.getContext('2d');
 
@@ -306,28 +463,27 @@ const lightCtx = lightCanvas.getContext('2d');
 
 function drawFog() {
   const PROXIMITY_RADIUS = 50;
-  // Diagonal covers the entire canvas from any player position
-  const VISION_RADIUS = Math.hypot(canvas.width, canvas.height);
 
   if (fogCanvas.width !== canvas.width || fogCanvas.height !== canvas.height) {
     fogCanvas.width = canvas.width;
     fogCanvas.height = canvas.height;
   }
 
-  // Fill fog layer solid dark
   fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
-  fogCtx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  fogCtx.fillStyle = 'rgba(0, 0, 0, 1)';
   fogCtx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
 
-  // Cut out visible areas by erasing from the fog layer
   fogCtx.globalCompositeOperation = 'destination-out';
 
-  // Front semicircle (full canvas reach)
-  fogCtx.beginPath();
-  fogCtx.moveTo(player.x, player.y);
-  fogCtx.arc(player.x, player.y, VISION_RADIUS, player.angle - Math.PI, player.angle);
-  fogCtx.closePath();
-  fogCtx.fill();
+  // Wall-occluded visibility polygon — rays stop at wall surfaces
+  const visPts = computeVisibilityPolygon(player.x, player.y, player.angle);
+  if (visPts.length >= 2) {
+    fogCtx.beginPath();
+    fogCtx.moveTo(player.x, player.y);
+    for (const p of visPts) fogCtx.lineTo(p.x, p.y);
+    fogCtx.closePath();
+    fogCtx.fill();
+  }
 
   // Proximity circle — always visible regardless of facing direction
   fogCtx.beginPath();
@@ -345,6 +501,64 @@ function drawLamps() {
     ctx.beginPath();
     ctx.arc(lamp.x, lamp.y, 8, 0, Math.PI * 2);
     ctx.fill();
+  }
+}
+
+function drawPickup() {
+  if (pickup.collected) return;
+  if (pickup.visibleToPlayer) {
+    // Actual shape — glowing diamond (rotated square)
+    ctx.save();
+    ctx.translate(pickup.x, pickup.y);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = '#ffe066';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.fillRect(-9, -9, 18, 18);
+    ctx.strokeRect(-9, -9, 18, 18);
+    ctx.restore();
+  } else {
+    // ! hint icon — always visible through fog
+    ctx.save();
+    ctx.fillStyle = '#ffe066';
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', pickup.x, pickup.y - 22);
+    ctx.restore();
+  }
+}
+
+function drawExfilPoints() {
+  for (const ef of exfilPoints) {
+    const color = ef.active ? '#44ff88' : '#888888';
+
+    // Testing: always show secondary location as a dim circle even when undiscovered
+    if (ef.type === 'secondary' && !ef.discovered) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ef.x, ef.y, 20, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
+
+    // Ground ring
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ef.x, ef.y, 20, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Down-pointing chevron
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ef.x - 10, ef.y - 6);
+    ctx.lineTo(ef.x,      ef.y + 8);
+    ctx.lineTo(ef.x + 10, ef.y - 6);
+    ctx.stroke();
   }
 }
 
@@ -413,6 +627,8 @@ function draw() {
   drawPlayer();
   drawLighting();
   drawFog();
+  drawExfilPoints();
+  drawPickup();
 }
 
 function loop() {
@@ -421,4 +637,5 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+initExfil(initPickup());
 loop();

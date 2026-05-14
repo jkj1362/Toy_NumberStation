@@ -32,6 +32,9 @@ const LAMPS = [
   { x: 200, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   { x: 580, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   { x: 920, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
+  // Corridor wall south face (lobby side, y=458 = bottom edge of wall) — lights lobby from above
+  { x: 350, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
+  { x: 700, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
   // Bottom wall — lights lobby from below, flanking the entry gap (x:430–570), spacing 350
   { x: 350, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   { x: 700, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
@@ -85,9 +88,10 @@ Same compositing technique as the existing fog of war (`fogCanvas` / `destinatio
 
 Net visual result:
 - Lit area within player vision → fully visible
-- Dark area within player vision → dimly visible (lighting darkness remains)
+- Dark area within player vision → pitch black (lighting + fog both opaque)
 - Outside vision cone → covered by fog regardless of lighting
 - Shot-out lamp zone → dark; player has tactical cover there
+- Wall surfaces block the vision cone — light pools behind walls are invisible even if the player faces that direction
 
 ---
 
