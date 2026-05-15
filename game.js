@@ -6,8 +6,10 @@ const WALLS = [
   { x:    0, y:   0, w: 1100, h:  18 },
   { x:    0, y: 732, w:  430, h:  18 },
   { x:  570, y: 732, w:  530, h:  18 },
-  { x:    0, y:   0, w:   18, h: 750 },
-  { x: 1082, y:   0, w:   18, h: 750 },
+  { x:    0, y:   0, w:   18, h: 160 }, // left perimeter — gap y:160–220 (duct, Room A)
+  { x:    0, y: 220, w:   18, h: 530 },
+  { x: 1082, y:   0, w:   18, h: 160 }, // right perimeter — gap y:160–220 (duct, Room B/C)
+  { x: 1082, y: 220, w:   18, h: 530 },
   // Corridor wall at y=440 — left gap x:220–320, right gap x:778–860
   // Center extends to x=778 (not x=760) to close corner with Room B/C divider
   { x:   18, y: 440, w:  202, h:  18 },
@@ -64,6 +66,13 @@ const LAMPS = [
   // Room F — right perimeter wall
   { x:1082, y: 590, wallSide: 'E', radius: 200, color: '#ffdc96', active: true },
 ];
+
+// Wall duct/window exits — manually activated bonus exfil points
+const WALL_GAP_EXITS = [
+  { x:    9, y: 190, roomId: 'room_a',  activated: false }, // left perimeter duct, Room A
+  { x: 1091, y: 190, roomId: 'room_bc', activated: false }, // right perimeter duct, Room B/C
+];
+let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
 const PLAYER_RADIUS = 28; // outermost extent of the character shape
 const VISION_ANGLE = Math.PI * 2 / 3; // 120° total field of view (tune between PI/2 and 5PI/6 for 90°–150°)
@@ -122,6 +131,21 @@ function inVisionCone(wx, wy) {
   return Math.abs(diff) <= VISION_ANGLE / 2;
 }
 
+function isLit(wx, wy) {
+  // Player's own ambient glow
+  const pdx = wx - player.x, pdy = wy - player.y;
+  if (pdx * pdx + pdy * pdy <= 80 * 80) return true;
+  // Active lamp coverage
+  const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
+  for (const lamp of LAMPS) {
+    if (!lamp.active) continue;
+    const [odx, ody] = offsets[lamp.wallSide];
+    const dx = wx - (lamp.x + odx), dy = wy - (lamp.y + ody);
+    if (dx * dx + dy * dy <= lamp.radius * lamp.radius) return true;
+  }
+  return false;
+}
+
 function initPickup() {
   const eligible = ROOMS.filter(r => !r.startingSpace);
   const room = eligible[Math.floor(Math.random() * eligible.length)];
@@ -133,11 +157,9 @@ function initPickup() {
   return room.id;
 }
 
-function initExfil(pickupRoomId) {
-  const eligible = ROOMS.filter(r => !r.startingSpace && r.id !== pickupRoomId);
-  const room = eligible[Math.floor(Math.random() * eligible.length)];
-  exfilPoints[0] = { x: 500, y: 741, type: 'primary',   active: false, discovered: true  };
-  exfilPoints[1] = { x: room.cx, y: room.cy, type: 'secondary', active: false, discovered: false };
+function initExfil() {
+  exfilPoints.length = 0;
+  exfilPoints.push({ x: 500, y: 741, type: 'primary', active: false, discovered: true });
 }
 
 function pushOutOfWalls(entity, radius) {
@@ -177,7 +199,9 @@ function reset() {
   enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
   for (const lamp of LAMPS) lamp.active = true;
   gamePhase = 'infiltrate';
-  initExfil(initPickup());
+  gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
+  initPickup();
+  initExfil();
 }
 
 let bWasPressed = false;
@@ -254,9 +278,9 @@ function update() {
   const ePressed = (keys['e'] ?? false) || (gp?.buttons[2]?.pressed ?? false); // button 2 = X (face left)
 
   if (gamePhase === 'infiltrate' && !pickup.collected) {
-    pickup.visibleToPlayer = inVisionCone(pickup.x, pickup.y);
+    pickup.visibleToPlayer = inVisionCone(pickup.x, pickup.y) && isLit(pickup.x, pickup.y);
     for (const ef of exfilPoints) {
-      if (!ef.discovered && inVisionCone(ef.x, ef.y)) ef.discovered = true;
+      if (!ef.discovered && inVisionCone(ef.x, ef.y) && isLit(ef.x, ef.y)) ef.discovered = true;
     }
     if (ePressed && !eWasPressed) {
       const dx = player.x - pickup.x, dy = player.y - pickup.y;
@@ -265,6 +289,17 @@ function update() {
         gamePhase = 'exfil';
         for (const ef of exfilPoints) { ef.active = true; ef.discovered = true; }
       }
+    }
+  }
+
+  // Gap exit activation — any phase, must be visible and in range
+  for (const gap of gapExits) {
+    if (gap.activated) continue;
+    if (!inVisionCone(gap.x, gap.y) || !isLit(gap.x, gap.y)) continue;
+    const gdx = player.x - gap.x, gdy = player.y - gap.y;
+    if (ePressed && !eWasPressed && gdx * gdx + gdy * gdy <= INTERACT_RADIUS * INTERACT_RADIUS) {
+      gap.activated = true;
+      exfilPoints.push({ x: gap.x, y: gap.y, type: 'gap', active: gamePhase === 'exfil', discovered: true });
     }
   }
 
@@ -529,6 +564,23 @@ function drawPickup() {
   }
 }
 
+function drawGapExits() {
+  for (const gap of gapExits) {
+    if (!inVisionCone(gap.x, gap.y) || !isLit(gap.x, gap.y)) continue;
+    if (gap.activated) continue; // activated gaps are rendered by drawExfilPoints()
+    ctx.strokeStyle = '#ffe066';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(gap.x, gap.y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = '#ffe066';
+    ctx.beginPath();
+    ctx.moveTo(gap.x, gap.y - 5);
+    ctx.lineTo(gap.x, gap.y + 5);
+    ctx.stroke();
+  }
+}
+
 function drawExfilPoints() {
   for (const ef of exfilPoints) {
     const color = ef.active ? '#44ff88' : '#888888';
@@ -628,6 +680,7 @@ function draw() {
   drawLighting();
   drawFog();
   drawExfilPoints();
+  drawGapExits();
   drawPickup();
 }
 
@@ -637,5 +690,6 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-initExfil(initPickup());
+initPickup();
+initExfil();
 loop();
