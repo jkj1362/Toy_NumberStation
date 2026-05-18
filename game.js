@@ -117,9 +117,10 @@ const ROOMS = [
 ];
 
 // Mission state
-let pickup       = { x: 0, y: 0, roomId: '', collected: false, visibleToPlayer: false };
-let exfilPoints  = [];
-let gamePhase    = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete'
+let pickup          = { x: 0, y: 0, roomId: '', collected: false, visibleToPlayer: false };
+let exfilPoints     = [];
+let gamePhase       = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete'
+let hasMapKnowledge = true;         // true = player acquired facility map during day phase
 
 function inVisionCone(wx, wy) {
   const dx = wx - player.x, dy = wy - player.y;
@@ -366,6 +367,16 @@ function drawWalls() {
   }
 }
 
+function drawMapGeometry() {
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = '#6a7080'; // cool grey-blue schematic overlay — distinct from lit walls (#4a4a4a)
+  for (const wall of WALLS) {
+    ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+  }
+  ctx.restore();
+}
+
 function drawPlayer() {
   ctx.save();
   ctx.translate(player.x, player.y);
@@ -473,7 +484,8 @@ function computeVisibilityPolygon(px, py, playerAngle) {
     while (diff >  Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     if (Math.abs(diff) <= half + eps) {
-      angles.push(a - eps, a, a + eps);
+      const na = forward + diff; // unwrap to same range as boundary angles — fixes sort near ±π
+      angles.push(na - eps, na, na + eps);
     }
   }
   angles.sort((a, b) => a - b);
@@ -682,6 +694,7 @@ function draw() {
   drawExfilPoints();
   drawGapExits();
   drawPickup();
+  if (hasMapKnowledge) drawMapGeometry();
 }
 
 function loop() {
