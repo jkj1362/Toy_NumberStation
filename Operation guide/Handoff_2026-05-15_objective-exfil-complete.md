@@ -49,7 +49,7 @@ Toys/
 | Lighting | `LAMPS` (12 wall-mounted lamps), `drawLighting()` with offscreen `lightCanvas`, `destination-out` radial gradients, half-plane clip per lamp, player ambient glow (80px), lamps shootable → `lamp.active = false` |
 | Vision | `VISION_ANGLE = Math.PI*2/3` (120°), wall-occluded via `computeVisibilityPolygon()`, offscreen `fogCanvas`, 50px proximity circle. All pawns share these values — see `feature_00_pawn_movement_vision.md` |
 | Vision helpers | `inVisionCone(wx, wy)` — angle-only check (no LOS). `isLit(wx, wy)` — checks lamp radius + player glow. Icons only shown when BOTH are true. |
-| Raycasting | `WALL_SEGMENTS`, `WALL_CORNERS` (precomputed IIFEs from WALLS). `castVisRay(px, py, angle)`, `computeVisibilityPolygon(px, py, playerAngle)` |
+| Raycasting | `WALL_SEGMENTS`, `WALL_CORNERS` (precomputed IIFEs from WALLS). `castVisRay(px, py, angle)`, `computeVisibilityPolygon(px, py, playerAngle)`. Corner angles normalized to `forward + diff` (not raw `atan2`) before sorting — required for correct polygon ordering when facing near ±180° |
 | Mission | `gamePhase`: `'infiltrate'`→`'exfil'`→`'complete'`. `pickup` object. `exfilPoints` array. `gapExits` array. `INTERACT_RADIUS = 30`, `EXFIL_RADIUS = 40` |
 | Pickup | `initPickup()` — random room (not Lobby). `drawPickup()` — `!` icon (always) or diamond shape (vision cone + lit). E key / button 2 (X) to collect when in range |
 | Exfil | Primary at entry gap (500, 741). Wall duct exits in `WALL_GAP_EXITS` — manually activated by player interaction, hidden until lit+visible. `drawExfilPoints()`, `drawGapExits()` |
@@ -169,6 +169,7 @@ Currently `inVisionCone(wx, wy)` is hardcoded to check from `player.x/y/angle`. 
 - **`pushOutOfWalls` called twice:** Resolves corner penetration.
 - **Button one-shot pattern:** `let xWasPressed = false` → check `pressed && !wasPressed`, then update `wasPressed = pressed` at end of block.
 - **Icon display condition:** `inVisionCone(x, y) && isLit(x, y)` — both required before showing any world-space indicator.
+- **Visibility polygon angle normalization:** In `computeVisibilityPolygon`, corner angles must be stored as `forward + diff` (unwrapped), not as the raw `Math.atan2()` value. Raw atan2 wraps at ±π; the cone boundary `forward + half` can exceed π. Using the raw value causes incorrect vertex sort order → crossed polygon edges → shattered cone boundary when facing near ±180°.
 - **WALL_SEGMENTS / WALL_CORNERS:** Precomputed IIFEs; rebuilt automatically when WALLS changes at load time. Static — walls never move.
 - **CLAUDE.md rules:** Simplicity first, surgical changes only, no speculative features, no comments unless the WHY is non-obvious.
 

@@ -104,15 +104,22 @@ The visible area is a **wall-occluded polygon**, not a simple arc. Rays are cast
 // canvas-space forward direction
 const forward = pawn.angle - Math.PI / 2;
 
-// rays at cone boundaries + one per in-cone wall corner (±ε)
-// each ray: nearest intersection against WALL_SEGMENTS
-// sorted by angle → polygon connecting player to all hit points
+// For each in-cone wall corner, normalize its angle to [forward - π, forward + π]
+// before pushing into the angles array — this keeps all angles in the same
+// unwrapped number line as the boundary angles (forward ± half) so the sort
+// produces a correct clockwise ordering even when the cone spans the ±π boundary.
+const na = forward + diff; // diff already normalized; use na, NOT raw atan2 value
+angles.push(na - eps, na, na + eps);
+
+// sort → cast rays in order → polygon connecting player to all hit points
 ```
 
 Key functions (in `game.js`):
 - `castVisRay(px, py, angle)` — single ray, returns nearest hit `{x, y}`
 - `computeVisibilityPolygon(px, py, playerAngle)` — full cone polygon
 - `WALL_SEGMENTS` / `WALL_CORNERS` — precomputed static arrays (walls never move)
+
+**Critical:** corner angles must be stored as `forward + diff` (unwrapped), not as the raw `Math.atan2()` return value. Using raw atan2 causes incorrect vertex ordering when the player faces near ±180°, because atan2 wraps at ±π while the cone boundary `forward + half` may exceed π — producing crossed line segments in the visibility polygon.
 
 **`inVisionCone(wx, wy)` (angle-only check)** — a lighter helper that tests whether a world point falls within the cone angle but does **not** check line-of-sight. Used for pickup reveal and exfil discovery (Feature 03). Full LOS check against walls is deferred.
 
