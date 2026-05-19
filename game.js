@@ -242,6 +242,7 @@ function update() {
   const gp = navigator.getGamepads?.()[0] ?? null;
 
   // WASD
+  const prevX = player.x, prevY = player.y;
   if (keys['a']) player.x -= player.speed;
   if (keys['d']) player.x += player.speed;
   if (keys['w']) player.y -= player.speed;
@@ -259,7 +260,7 @@ function update() {
   player.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width  - PLAYER_RADIUS, player.x));
   player.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, player.y));
 
-  updateEnemies();
+  if (player.x !== prevX || player.y !== prevY) notifyPlayerMoved();
 
   // R-stick rotation (axes 2, 3) — updates target, angle lerps toward it
   const right = readStick(gp, 2, 3);
@@ -280,6 +281,7 @@ function update() {
       vy: dy * 25,
       angle: player.angle,
     });
+    emitSound(player.x, player.y, GUNSHOT_RADIUS, true);
   }
   rtWasPressed = rtPressed;
 
@@ -330,6 +332,8 @@ function update() {
   }
 
   eWasPressed = ePressed;
+
+  updateEnemies();
 
   // Move, collide, and cull projectiles
   for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -675,6 +679,7 @@ function draw() {
   drawPlayer();
   drawLighting();
   drawFog();
+  drawSoundEvents();
   drawExfilPoints();
   drawGapExits();
   drawPickup();
