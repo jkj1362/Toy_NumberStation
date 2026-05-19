@@ -35,13 +35,6 @@ const keys = {};
 const projectiles = [];
 let rtWasPressed = false;
 
-const INITIAL_ENEMIES = [
-  { x: 600, y: 600, angle: 0 },   // Lobby
-  { x: 580, y: 220, angle: 0 },   // Room B (top-center)
-  { x: 940, y: 590, angle: 0 },   // Room F (bottom-right)
-];
-let enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
-const ENEMY_HIT_RADIUS = 20;
 
 const LAMP_HIT_RADIUS = 10;
 // Rules: (1) at least one lamp per room, (2) same-wall lamp spacing >= radius
@@ -147,6 +140,24 @@ function isLit(wx, wy) {
   return false;
 }
 
+// Lamp-only variant — excludes the player's self-glow. Used by enemy detection so
+// the player's ambient light doesn't make them permanently visible to guards.
+function isLitByLamps(wx, wy) {
+  const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
+  for (const lamp of LAMPS) {
+    if (!lamp.active) continue;
+    // Half-plane clip — mirrors the rect clip in drawLighting so detection matches visuals
+    if (lamp.wallSide === 'N' && wy < lamp.y - 18) continue; // N lamp lights downward only
+    if (lamp.wallSide === 'S' && wy > lamp.y + 18) continue; // S lamp lights upward only
+    if (lamp.wallSide === 'E' && wx > lamp.x + 18) continue; // E lamp lights leftward only
+    if (lamp.wallSide === 'W' && wx < lamp.x - 18) continue; // W lamp lights rightward only
+    const [odx, ody] = offsets[lamp.wallSide];
+    const dx = wx - (lamp.x + odx), dy = wy - (lamp.y + ody);
+    if (dx * dx + dy * dy <= lamp.radius * lamp.radius) return true;
+  }
+  return false;
+}
+
 function initPickup() {
   const eligible = ROOMS.filter(r => !r.startingSpace);
   const room = eligible[Math.floor(Math.random() * eligible.length)];
@@ -197,7 +208,7 @@ function reset() {
   player.angle = 0;
   player.targetAngle = 0;
   projectiles.length = 0;
-  enemies = INITIAL_ENEMIES.map(e => ({ ...e }));
+  resetEnemies();
   for (const lamp of LAMPS) lamp.active = true;
   gamePhase = 'infiltrate';
   gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
@@ -247,6 +258,8 @@ function update() {
   // Canvas bounds fallback
   player.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width  - PLAYER_RADIUS, player.x));
   player.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, player.y));
+
+  updateEnemies();
 
   // R-stick rotation (axes 2, 3) — updates target, angle lerps toward it
   const right = readStick(gp, 2, 3);
@@ -410,35 +423,6 @@ function drawPlayer() {
   ctx.restore();
 }
 
-function drawEnemy(e) {
-  ctx.save();
-  ctx.translate(e.x, e.y);
-  ctx.rotate(e.angle);
-
-  ctx.fillStyle = '#d43a3a';
-  ctx.beginPath();
-  ctx.arc(-18, 0, 10, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(18, 0, 10, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#f55a5a';
-  ctx.beginPath();
-  ctx.arc(0, 0, 16, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.moveTo(0, -28);
-  ctx.lineTo(-7, -18);
-  ctx.lineTo(7, -18);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.restore();
-}
 
 function drawProjectiles() {
   ctx.strokeStyle = '#ffe066';
@@ -471,9 +455,9 @@ function castVisRay(px, py, angle) {
 }
 
 // Build a wall-occluded visibility polygon for the player's vision cone
-function computeVisibilityPolygon(px, py, playerAngle) {
+function computeVisibilityPolygon(px, py, playerAngle, visionAngle = VISION_ANGLE) {
   const forward = playerAngle - Math.PI / 2;
-  const half    = VISION_ANGLE / 2;
+  const half    = visionAngle / 2;
   const eps     = 0.0001;
 
   // Cone boundary rays + one ray per visible wall corner (±ε for clean edges)
@@ -686,7 +670,7 @@ function draw() {
   drawFloor();
   drawWalls();
   drawLamps();
-  for (const e of enemies) drawEnemy(e);
+  drawEnemies();
   drawProjectiles();
   drawPlayer();
   drawLighting();

@@ -62,11 +62,38 @@ The `wallSide` determines a small offset applied to the radial gradient center, 
 
 The gradient is a full radial circle — the offset is cosmetic, positioning the brightest point just off the wall face.
 
+### Half-plane clip
+
+A lamp on the north wall must not bleed light upward through the wall. `drawLighting` enforces this with a canvas clip rect before drawing each lamp's gradient:
+
+| wallSide | Clip rect | Effect |
+|----------|-----------|--------|
+| N | `(0, lamp.y−18, W, H)` | Light only below the wall |
+| S | `(0, 0, W, lamp.y+18)` | Light only above the wall |
+| E | `(0, 0, lamp.x+18, H)` | Light only left of the wall |
+| W | `(lamp.x−18, 0, W, H)` | Light only right of the wall |
+
+**Critical:** any code that tests whether a point is lit by a lamp must apply this same half-plane check — otherwise points on the wrong side of a wall will pass the circle radius test even though they are visually dark. See `isLitByLamps` below.
+
 ---
 
 ## Shootability
 
 When a projectile's center comes within `LAMP_HIT_RADIUS` (10px) of a lamp, set `lamp.active = false`. The lamp goes dark permanently for the session. `reset()` restores all lamps to `active: true`.
+
+---
+
+## Lit-area Helpers
+
+Two functions in `game.js` answer the question "is a world point lit?":
+
+### `isLit(wx, wy)`
+Returns true if the point is within any active lamp's radius **or** within the player's 80px self-glow. Used for gameplay visibility checks (whether an icon is visible to the player, whether an exfil point is discoverable). Does **not** apply the half-plane clip — acceptable because these checks are player-perspective and the self-glow is intentional.
+
+### `isLitByLamps(wx, wy)`
+Returns true only if the point is within an active lamp's radius **and** within that lamp's lit half-plane. Does not count the player's self-glow. Used by enemy detection — enemies should not see a player in genuine darkness just because the player emits a personal ambient glow. Applies the same half-plane clip as `drawLighting`, so its result exactly matches what is visually rendered on screen.
+
+**Rule:** use `isLit` for player-facing visibility; use `isLitByLamps` for enemy detection and any system where the result must match the visual darkness.
 
 ---
 
