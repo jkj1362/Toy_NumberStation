@@ -63,3 +63,25 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## 5. Session Handoff
+
+**When context reaches ~60%, alert the user and recommend writing a session handoff document.**
+
+When you estimate the session token usage has crossed 60%, proactively say:
+
+> "We're getting deep into the session context. I recommend writing a session handoff document now so we can continue in a fresh session without losing any state. Want me to write one?"
+
+If the user agrees, write the handoff immediately following the format and rules in:
+
+```
+Operation guide/session handoff format.md
+```
+
+Key rules:
+- Save to `Operation guide/` with filename `Handoff_YYYY-MM-DD_slug.md`
+- Always mark exactly one feature as the next to implement
+- Include a ⚠️ warning for any temporary test layouts or known incomplete states in the code
+- The incoming session must be able to start work immediately from the handoff alone
