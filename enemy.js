@@ -1,22 +1,60 @@
 const ENEMY_HIT_RADIUS  = 20;
 const ALERT_FRAMES      = 180;   // 3 s at 60 fps
-const SUSPICION_TIMEOUT = 3600;  // 60 s at 60 fps
+const SUSPICION_TIMEOUT = 300;   //  5 s at 60 fps — no-input timeout for level-1 suspicion
 const REACTION_DELAY    = 45;    // 0.75 s — window of opportunity before enemy reacts
 const GUNSHOT_RADIUS    = 350;
 const FOOTSTEP_RADIUS   = 120;   // max footstep reach at walk speed
 const WALK_SPEED        = 4;     // player.speed at normal walk; used for footstep scaling
 const SOUND_LIFETIME    = 30;    // frames for visual ring to fade
+const ARRIVAL_RADIUS    = 8;     // px — enemy considered "at" a waypoint within this distance
+const ENEMY_RADIUS      = 16;    // px — collision radius for pushOutOfWalls during patrol
 
 const STANDARD_VISION = Math.PI * 2 / 3; // 120° — matches VISION_ANGLE in game.js
 
+// Patrol node: { x, y, pauseFrames, sweep (radians), sweepSpeed (rad/frame, +CW/-CCW) }
 // Per-enemy detection parameters:
 //   visionAngle:     cone width in radians
 //   sightRange:      max detection distance in lit conditions (Infinity = unlimited)
 //   proximityRadius: awareness bubble — detects player regardless of facing, with delay
+//   patrolRoute:     array of patrol nodes; [] = static
+//   patrolSpeed:     px/frame during translation
+// TEST LAYOUT — all three enemies in the lobby, facing north (away from player entry).
+// Player spawns at (500,680). Walk up behind any enemy to test suspicion/proximity.
+// Restore original patrol routes after suspicion testing is done.
 const INITIAL_ENEMIES = [
-  { x: 600, y: 600, angle: 0, targetAngle: 0, visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50 }, // Lobby
-  { x: 580, y: 220, angle: 0, targetAngle: 0, visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50 }, // Room B
-  { x: 940, y: 590, angle: 0, targetAngle: 0, visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50 }, // Room F
+  // Enemy 1 — lobby left, static, facing north
+  {
+    x: 250, y: 520, angle: 0, targetAngle: 0,
+    visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
+    patrolSpeed: 1.5,
+    patrolRoute: [],
+  },
+  // Enemy 2 — lobby center, short left-right patrol so turnaround speed is observable
+  {
+    x: 500, y: 520, angle: 0, targetAngle: 0,
+    visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
+    patrolSpeed: 1.5,
+    patrolRoute: [
+      { x: 420, y: 520, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
+      { x: 580, y: 520, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
+    ],
+  },
+  // Enemy 3 — cross-room patrol Room A ↔ Corridor ↔ Room BC, 180° sweep at each end
+  {
+    x: 200, y: 229, angle: 0, targetAngle: 0,
+    visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
+    patrolSpeed: 1.5,
+    patrolRoute: [
+      { x: 200, y: 229, pauseFrames: 60, sweep: Math.PI, sweepSpeed: 0.008 }, // Room A — sweep then head east
+      { x: 409, y: 295, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room A gap
+      { x: 589, y: 229, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Corridor center
+      { x: 769, y: 210, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room BC gap
+      { x: 930, y: 229, pauseFrames: 60, sweep: Math.PI, sweepSpeed: 0.008 }, // Room BC — sweep then head west
+      { x: 769, y: 210, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room BC gap (return)
+      { x: 589, y: 229, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Corridor center (return)
+      { x: 409, y: 295, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room A gap (return)
+    ],
+  },
 ];
 
 let enemies      = [];
@@ -24,23 +62,36 @@ let soundEvents  = [];
 let footstepTimer = 0;
 
 function resetEnemies() {
-  enemies = INITIAL_ENEMIES.map(e => ({
+  enemies = INITIAL_ENEMIES.map((e, i) => ({
     ...e,
-    state:           'patrol',
-    alertTimer:      0,
-    suspicionTimer:  0,
-    reactionTimer:   0,   // counts down; state change held until 0
-    pendingReaction: null, // { state, targetAngle } applied when reactionTimer hits 0
+    index:              i + 1, // 1-based debug label
+    state:              'patrol',
+    alertTimer:         0,
+    suspicionTimer:     0,
+    reactionTimer:      0,    // counts down; state change held until 0
+    pendingReaction:    null, // { state, targetAngle, sourceX, sourceY }
+    suspicionLevel:     0,    // how many times enemy has entered suspicious from patrol
+    suspicionPhase:     'turning', // 'turning'|'moving'|'searching'|'returning'
+    suspicionSourceX:   0,    // world position of the suspicious stimulus
+    suspicionSourceY:   0,
+    suspicionReturnX:   0,    // position to return to after investigation
+    suspicionReturnY:   0,
+    suspicionSearchAccum:  0,  // accumulated search rotation at source
+    suspicionOriginalAngle: 0, // targetAngle saved on suspicion entry; restored on return to patrol
+    patrolIndex:        0,    // current target waypoint index
+    patrolPauseTimer:   0,    // counts up; node done when it reaches node.pauseFrames
+    patrolSweepAccum:   0,    // accumulated |rotation| at current node
+    enemyFootstepTimer: 0,    // counts up; emits footstep every 30 frames while moving
   }));
   soundEvents.length = 0;
   footstepTimer = 0;
 }
 
 // Queue a delayed state change. Does nothing if already reacting (existing pending wins).
-function scheduleReaction(e, toState, targetAngle) {
+function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y) {
   if (e.reactionTimer > 0) return;
   e.reactionTimer   = REACTION_DELAY;
-  e.pendingReaction = { state: toState, targetAngle };
+  e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY };
 }
 
 // Apply sound-triggered state transitions for one enemy.
@@ -48,7 +99,7 @@ function scheduleReaction(e, toState, targetAngle) {
 function applySoundReaction(e, sourceX, sourceY) {
   const angle = Math.atan2(sourceX - e.x, -(sourceY - e.y));
   if (e.state === 'patrol') {
-    scheduleReaction(e, 'suspicious', angle);
+    scheduleReaction(e, 'suspicious', angle, sourceX, sourceY);
   } else if (e.state === 'suspicious') {
     // Second sound while suspicious → confirmed alert (immediate, no delay)
     e.reactionTimer   = 0;
@@ -158,10 +209,27 @@ function updateEnemies() {
     if (e.reactionTimer > 0) {
       e.reactionTimer--;
       if (e.reactionTimer === 0 && e.pendingReaction) {
+        const savedAngle = e.targetAngle; // capture BEFORE overwrite
         e.state       = e.pendingReaction.state;
         e.targetAngle = e.pendingReaction.targetAngle;
-        if (e.state === 'suspicious') e.suspicionTimer = 0;
-        if (e.state === 'alert')      e.alertTimer     = ALERT_FRAMES;
+        if (e.state === 'suspicious') {
+          e.suspicionOriginalAngle = savedAngle; // original facing, not the source direction
+          e.suspicionTimer  = 0;
+          e.suspicionLevel++;
+          e.suspicionSourceX = e.pendingReaction.sourceX;
+          e.suspicionSourceY = e.pendingReaction.sourceY;
+          if (e.suspicionLevel >= 2) {
+            // Second+ suspicion: move to source and investigate
+            e.suspicionPhase      = 'moving';
+            e.suspicionReturnX    = e.x;
+            e.suspicionReturnY    = e.y;
+            e.suspicionSearchAccum = 0;
+          } else {
+            // First suspicion: turn toward source and wait
+            e.suspicionPhase = 'turning';
+          }
+        }
+        if (e.state === 'alert') e.alertTimer = ALERT_FRAMES;
         e.pendingReaction = null;
       }
     }
@@ -183,16 +251,66 @@ function updateEnemies() {
       }
     }
 
-    // 4. Suspicious state: tick suspicion timer, check for Path B sight escalation
+    // 4. Suspicious state — two-level behavior
     if (e.state === 'suspicious') {
       e.suspicionTimer++;
-      if (e.suspicionTimer >= SUSPICION_TIMEOUT) {
-        e.state          = 'patrol';
-        e.reactionTimer  = 0;
-        e.pendingReaction = null;
+
+      if (e.suspicionPhase === 'turning') {
+        // Level 1: turn toward source in place, timeout → patrol
+        if (e.suspicionTimer >= SUSPICION_TIMEOUT) {
+          e.state = 'patrol';
+          e.targetAngle = e.suspicionOriginalAngle; // restore original facing
+          e.reactionTimer = 0;
+          e.pendingReaction = null;
+        }
+
+      } else if (e.suspicionPhase === 'moving') {
+        // Level 2+: walk to source of suspicion
+        const sdx = e.suspicionSourceX - e.x, sdy = e.suspicionSourceY - e.y;
+        const sdist2 = sdx * sdx + sdy * sdy;
+        if (sdist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+          const sdist = Math.sqrt(sdist2);
+          e.x += (sdx / sdist) * e.patrolSpeed;
+          e.y += (sdy / sdist) * e.patrolSpeed;
+          e.targetAngle = Math.atan2(sdx, -sdy);
+          pushOutOfWalls(e, ENEMY_RADIUS);
+          pushOutOfWalls(e, ENEMY_RADIUS);
+        } else {
+          e.suspicionPhase     = 'searching';
+          e.suspicionSearchAccum = 0;
+        }
+        // Failsafe: if stuck moving too long, skip to return
+        if (e.suspicionTimer >= SUSPICION_TIMEOUT * 3) e.suspicionPhase = 'returning';
+
+      } else if (e.suspicionPhase === 'searching') {
+        // Small rotation at source — looks around for the threat
+        e.targetAngle          += 0.01;
+        e.suspicionSearchAccum += 0.01;
+        if (e.suspicionSearchAccum >= Math.PI) {
+          e.suspicionPhase = 'returning';
+        }
+
+      } else if (e.suspicionPhase === 'returning') {
+        // Walk back to the position where suspicion first triggered
+        const rdx = e.suspicionReturnX - e.x, rdy = e.suspicionReturnY - e.y;
+        const rdist2 = rdx * rdx + rdy * rdy;
+        if (rdist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+          const rdist = Math.sqrt(rdist2);
+          e.x += (rdx / rdist) * e.patrolSpeed;
+          e.y += (rdy / rdist) * e.patrolSpeed;
+          e.targetAngle = Math.atan2(rdx, -rdy);
+          pushOutOfWalls(e, ENEMY_RADIUS);
+          pushOutOfWalls(e, ENEMY_RADIUS);
+        } else {
+          // Back at patrol position — resume patrol with original facing
+          e.state = 'patrol';
+          e.targetAngle = e.suspicionOriginalAngle;
+          e.reactionTimer = 0;
+          e.pendingReaction = null;
+        }
       }
-      // Path B (sight while suspicious) is handled by step 2 above automatically:
-      // as the enemy lerps toward the sound source, if the player enters the cone → alert
+      // Path B (sight while suspicious) handled by step 2: as enemy turns/moves, if player
+      // enters the lit cone → immediate alert regardless of suspicion phase.
     }
 
     // 5. Alert countdown
@@ -201,7 +319,53 @@ function updateEnemies() {
       if (e.alertTimer <= 0) e.state = 'cautious';
     }
 
-    e.angle = lerpAngle(e.angle, e.targetAngle, 0.12);
+    // 6. Patrol movement — only when in patrol state with a defined route
+    if (e.state === 'patrol' && e.patrolRoute.length > 0) {
+      const node = e.patrolRoute[e.patrolIndex];
+      const dx = node.x - e.x, dy = node.y - e.y;
+      const dist2 = dx * dx + dy * dy;
+
+      if (dist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+        // Moving toward node
+        const dist = Math.sqrt(dist2);
+        const prevX = e.x, prevY = e.y;
+        e.x += (dx / dist) * e.patrolSpeed;
+        e.y += (dy / dist) * e.patrolSpeed;
+        e.targetAngle = Math.atan2(dx, -dy);
+        pushOutOfWalls(e, ENEMY_RADIUS);
+        pushOutOfWalls(e, ENEMY_RADIUS);
+        // Enemy footstep ring (visual only — does not alert other enemies)
+        if (e.x !== prevX || e.y !== prevY) {
+          e.enemyFootstepTimer++;
+          if (e.enemyFootstepTimer >= 30) {
+            e.enemyFootstepTimer = 0;
+            const fRadius = e.proximityRadius + (e.patrolSpeed / WALK_SPEED) * (FOOTSTEP_RADIUS - e.proximityRadius);
+            soundEvents.push({ x: e.x, y: e.y, radius: fRadius, life: SOUND_LIFETIME });
+          }
+        }
+      } else {
+        // At node — sweep then pause then advance
+        if (Math.abs(node.sweep) > 0 && e.patrolSweepAccum < Math.abs(node.sweep)) {
+          e.targetAngle      += node.sweepSpeed;
+          e.patrolSweepAccum += Math.abs(node.sweepSpeed);
+        } else if (e.patrolPauseTimer < node.pauseFrames) {
+          e.patrolPauseTimer++;
+        } else {
+          // Advance to next node
+          e.patrolIndex      = (e.patrolIndex + 1) % e.patrolRoute.length;
+          e.patrolSweepAccum = 0;
+          e.patrolPauseTimer = 0;
+          const next = e.patrolRoute[e.patrolIndex];
+          if (next.sweep === 0) {
+            // Pre-orient toward next destination
+            e.targetAngle = Math.atan2(next.x - e.x, -(next.y - e.y));
+          }
+        }
+      }
+    }
+
+    const turnRate = (e.state === 'patrol') ? 0.04 : 0.10;
+    e.angle = lerpAngle(e.angle, e.targetAngle, turnRate);
   }
 }
 
@@ -323,6 +487,26 @@ function drawEnemies() {
       ctx.fillText(isAlert ? '!' : '?', e.x, e.y - 38);
       ctx.restore();
     }
+  }
+}
+
+// Always-visible debug number labels — drawn after fog in game.js so they show through darkness
+function drawEnemyLabels() {
+  for (const e of enemies) {
+    ctx.save();
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Dark backing pill for readability
+    const label = String(e.index);
+    const lx = e.x, ly = e.y - 56;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillText(label, lx, ly);
+    ctx.restore();
   }
 }
 

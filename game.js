@@ -680,6 +680,7 @@ function draw() {
   drawLighting();
   drawFog();
   drawSoundEvents();
+  drawEnemyLabels();
   drawExfilPoints();
   drawGapExits();
   drawPickup();
