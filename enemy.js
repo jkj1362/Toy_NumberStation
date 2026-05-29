@@ -11,6 +11,78 @@ const ENEMY_RADIUS      = 16;    // px — collision radius for pushOutOfWalls d
 
 const STANDARD_VISION = Math.PI * 2 / 3; // 120° — matches VISION_ANGLE in game.js
 
+const SEARCH_SWEEP_RATE = 0.016; // 270° over ~5 s at 60 fps
+const CAUTIOUS_FRAMES   = 1800;  // 30 s — lingering vigilance after returning to patrol
+
+// Reactive navigation graph — used by SEARCHING state to path to lastKnownX/Y.
+// Patrol routes use hand-placed waypoints; this graph is only for buildPath().
+const NAV_NODES = {
+  lobby:          { x: 460, y: 590 },
+  gap_corr_left:  { x: 270, y: 449 },
+  gap_corr_right: { x: 819, y: 449 },
+  corridor:       { x: 589, y: 229 },
+  gap_room_a:     { x: 409, y: 295 },
+  room_a:         { x: 200, y: 229 },
+  gap_room_bc:    { x: 769, y: 210 },
+  room_bc:        { x: 930, y: 229 },
+  gap_room_f:     { x: 909, y: 590 },
+  room_f:         { x: 991, y: 590 },
+};
+
+const NAV_EDGES = [
+  ['lobby',          'gap_corr_left'],
+  ['gap_corr_left',  'corridor'],
+  ['lobby',          'gap_corr_right'],
+  ['gap_corr_right', 'gap_room_f'],
+  ['gap_room_f',     'room_f'],
+  ['corridor',       'gap_room_a'],
+  ['gap_room_a',     'room_a'],
+  ['corridor',       'gap_room_bc'],
+  ['gap_room_bc',    'room_bc'],
+];
+
+const NAV_ADJ = (() => {
+  const a = {};
+  for (const id in NAV_NODES) a[id] = [];
+  for (const [u, v] of NAV_EDGES) { a[u].push(v); a[v].push(u); }
+  return a;
+})();
+
+function _nearestNavNode(x, y) {
+  let best = null, bestD2 = Infinity;
+  for (const id in NAV_NODES) {
+    const n = NAV_NODES[id];
+    const d2 = (n.x - x) ** 2 + (n.y - y) ** 2;
+    if (d2 < bestD2) { bestD2 = d2; best = id; }
+  }
+  return best;
+}
+
+// Ordered [{x,y}] waypoints: nav nodes start→end then final (toX,toY).
+// Same start/end node → straight-line to destination (skip graph).
+function buildPath(fromX, fromY, toX, toY) {
+  const s = _nearestNavNode(fromX, fromY);
+  const t = _nearestNavNode(toX,   toY);
+  if (s === t) return [{ x: toX, y: toY }];
+  const prev = { [s]: null };
+  const q = [s];
+  let found = false;
+  while (q.length) {
+    const cur = q.shift();
+    if (cur === t) { found = true; break; }
+    for (const nb of NAV_ADJ[cur]) {
+      if (nb in prev) continue;
+      prev[nb] = cur;
+      q.push(nb);
+    }
+  }
+  if (!found) return [{ x: toX, y: toY }];
+  const ids = [];
+  for (let c = t; c !== null; c = prev[c]) ids.unshift(c);
+  return ids.map(id => ({ x: NAV_NODES[id].x, y: NAV_NODES[id].y }))
+            .concat([{ x: toX, y: toY }]);
+}
+
 // Patrol node: { x, y, pauseFrames, sweep (radians), sweepSpeed (rad/frame, +CW/-CCW) }
 // Per-enemy detection parameters:
 //   visionAngle:     cone width in radians
@@ -18,25 +90,22 @@ const STANDARD_VISION = Math.PI * 2 / 3; // 120° — matches VISION_ANGLE in ga
 //   proximityRadius: awareness bubble — detects player regardless of facing, with delay
 //   patrolRoute:     array of patrol nodes; [] = static
 //   patrolSpeed:     px/frame during translation
-// TEST LAYOUT — all three enemies in the lobby, facing north (away from player entry).
-// Player spawns at (500,680). Walk up behind any enemy to test suspicion/proximity.
-// Restore original patrol routes after suspicion testing is done.
 const INITIAL_ENEMIES = [
-  // Enemy 1 — lobby left, static, facing north
+  // Enemy 1 — static lobby sentry, faces north
   {
-    x: 250, y: 520, angle: 0, targetAngle: 0,
+    x: 400, y: 590, angle: 0, targetAngle: 0,
     visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
     patrolSpeed: 1.5,
     patrolRoute: [],
   },
-  // Enemy 2 — lobby center, short left-right patrol so turnaround speed is observable
+  // Enemy 2 — short center patrol nested inside Enemy 1's range
   {
-    x: 500, y: 520, angle: 0, targetAngle: 0,
+    x: 500, y: 590, angle: 0, targetAngle: 0,
     visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
     patrolSpeed: 1.5,
     patrolRoute: [
-      { x: 420, y: 520, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
-      { x: 580, y: 520, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
+      { x: 420, y: 590, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
+      { x: 580, y: 590, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
     ],
   },
   // Enemy 3 — cross-room patrol Room A ↔ Corridor ↔ Room BC, 180° sweep at each end
@@ -82,6 +151,12 @@ function resetEnemies() {
     patrolPauseTimer:   0,    // counts up; node done when it reaches node.pauseFrames
     patrolSweepAccum:   0,    // accumulated |rotation| at current node
     enemyFootstepTimer: 0,    // counts up; emits footstep every 30 frames while moving
+    lastKnownX:         null, // player position at last confirmed sighting (null = never seen)
+    lastKnownY:         null,
+    searchPath:         [],   // nav waypoints to lastKnown position
+    searchPathIndex:    0,
+    searchSweepAccum:   0,    // accumulated rotation during search sweep
+    cautiousTimer:      0,    // >0 = lingering vigilance after a reactive incident
   }));
   soundEvents.length = 0;
   footstepTimer = 0;
@@ -107,8 +182,8 @@ function applySoundReaction(e, sourceX, sourceY) {
     e.state      = 'alert';
     e.alertTimer = ALERT_FRAMES;
     e.targetAngle = angle;
-  } else if (e.state === 'cautious') {
-    // Cautious skips suspicious — already on edge
+  } else if (e.state === 'searching' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
+    // Already on edge — any sound snaps straight to alert, skipping suspicion delay
     e.reactionTimer   = 0;
     e.pendingReaction = null;
     e.state      = 'alert';
@@ -185,6 +260,37 @@ function hasLOS(x1, y1, x2, y2) {
   return distToWall >= distToTarget;
 }
 
+// Step one tick along e.searchPath. Advances index across any waypoints already
+// reached (handles per-frame path rebuilds where the enemy starts at waypoint[0])
+// AND skips waypoints where pushOutOfWalls fully reverted the move (wall-stuck).
+// Returns true when the path is fully traversed.
+function followNavPath(e) {
+  let guard = e.searchPath.length + 1; // bound while-loop so a fully-blocked path can't infinite-loop
+  while (e.searchPathIndex < e.searchPath.length && guard-- > 0) {
+    const wp = e.searchPath[e.searchPathIndex];
+    const dx = wp.x - e.x, dy = wp.y - e.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+      e.searchPathIndex++;
+      continue;
+    }
+    const d = Math.sqrt(d2);
+    const prevX = e.x, prevY = e.y;
+    e.x += (dx / d) * e.patrolSpeed;
+    e.y += (dy / d) * e.patrolSpeed;
+    e.targetAngle = Math.atan2(dx, -dy);
+    pushOutOfWalls(e, ENEMY_RADIUS);
+    pushOutOfWalls(e, ENEMY_RADIUS);
+    // Wall fully blocked the move — abandon this waypoint rather than oscillate against it.
+    if (Math.abs(e.x - prevX) + Math.abs(e.y - prevY) < 0.1) {
+      e.searchPathIndex++;
+      continue;
+    }
+    return false;
+  }
+  return e.searchPathIndex >= e.searchPath.length;
+}
+
 // Vision cone detection only — no proximity bubble.
 // Proximity is handled separately with a reaction delay.
 function enemyCanSeeCone(e) {
@@ -219,11 +325,13 @@ function updateEnemies() {
           e.suspicionSourceX = e.pendingReaction.sourceX;
           e.suspicionSourceY = e.pendingReaction.sourceY;
           if (e.suspicionLevel >= 2) {
-            // Second+ suspicion: move to source and investigate
+            // Second+ suspicion: nav-path to source and investigate
             e.suspicionPhase      = 'moving';
             e.suspicionReturnX    = e.x;
             e.suspicionReturnY    = e.y;
             e.suspicionSearchAccum = 0;
+            e.searchPath          = buildPath(e.x, e.y, e.suspicionSourceX, e.suspicionSourceY);
+            e.searchPathIndex     = 0;
           } else {
             // First suspicion: turn toward source and wait
             e.suspicionPhase = 'turning';
@@ -234,13 +342,16 @@ function updateEnemies() {
       }
     }
 
-    // 2. Immediate: vision cone detection — always overrides any pending reaction
+    // 2. Immediate: vision cone detection — always overrides any pending reaction.
+    // alertTimer refreshes every visible frame so enemy stays alert while it can see player.
     if (enemyCanSeeCone(e)) {
       e.reactionTimer   = 0;
       e.pendingReaction = null;
       e.state      = 'alert';
       e.alertTimer = ALERT_FRAMES;
       e.targetAngle = Math.atan2(player.x - e.x, -(player.y - e.y));
+      e.lastKnownX = player.x;
+      e.lastKnownY = player.y;
     }
     // 3. Delayed: proximity detection — only when not already reacting or alert
     else if (e.reactionTimer === 0 && e.state !== 'alert') {
@@ -262,61 +373,95 @@ function updateEnemies() {
           e.targetAngle = e.suspicionOriginalAngle; // restore original facing
           e.reactionTimer = 0;
           e.pendingReaction = null;
+          e.cautiousTimer = CAUTIOUS_FRAMES;
         }
 
       } else if (e.suspicionPhase === 'moving') {
-        // Level 2+: walk to source of suspicion
-        const sdx = e.suspicionSourceX - e.x, sdy = e.suspicionSourceY - e.y;
-        const sdist2 = sdx * sdx + sdy * sdy;
-        if (sdist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
-          const sdist = Math.sqrt(sdist2);
-          e.x += (sdx / sdist) * e.patrolSpeed;
-          e.y += (sdy / sdist) * e.patrolSpeed;
-          e.targetAngle = Math.atan2(sdx, -sdy);
-          pushOutOfWalls(e, ENEMY_RADIUS);
-          pushOutOfWalls(e, ENEMY_RADIUS);
-        } else {
+        // Level 2+: nav-path to source of suspicion
+        if (followNavPath(e)) {
           e.suspicionPhase     = 'searching';
           e.suspicionSearchAccum = 0;
         }
         // Failsafe: if stuck moving too long, skip to return
-        if (e.suspicionTimer >= SUSPICION_TIMEOUT * 3) e.suspicionPhase = 'returning';
+        if (e.suspicionTimer >= SUSPICION_TIMEOUT * 3) {
+          e.suspicionPhase  = 'returning';
+          e.searchPath      = buildPath(e.x, e.y, e.suspicionReturnX, e.suspicionReturnY);
+          e.searchPathIndex = 0;
+        }
 
       } else if (e.suspicionPhase === 'searching') {
         // Small rotation at source — looks around for the threat
         e.targetAngle          += 0.01;
         e.suspicionSearchAccum += 0.01;
         if (e.suspicionSearchAccum >= Math.PI) {
-          e.suspicionPhase = 'returning';
+          e.suspicionPhase  = 'returning';
+          e.searchPath      = buildPath(e.x, e.y, e.suspicionReturnX, e.suspicionReturnY);
+          e.searchPathIndex = 0;
         }
 
       } else if (e.suspicionPhase === 'returning') {
-        // Walk back to the position where suspicion first triggered
-        const rdx = e.suspicionReturnX - e.x, rdy = e.suspicionReturnY - e.y;
-        const rdist2 = rdx * rdx + rdy * rdy;
-        if (rdist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
-          const rdist = Math.sqrt(rdist2);
-          e.x += (rdx / rdist) * e.patrolSpeed;
-          e.y += (rdy / rdist) * e.patrolSpeed;
-          e.targetAngle = Math.atan2(rdx, -rdy);
-          pushOutOfWalls(e, ENEMY_RADIUS);
-          pushOutOfWalls(e, ENEMY_RADIUS);
-        } else {
-          // Back at patrol position — resume patrol with original facing
+        // Nav-path back to the position where suspicion first triggered
+        if (followNavPath(e)) {
           e.state = 'patrol';
           e.targetAngle = e.suspicionOriginalAngle;
           e.reactionTimer = 0;
           e.pendingReaction = null;
+          e.cautiousTimer = CAUTIOUS_FRAMES;
         }
       }
       // Path B (sight while suspicious) handled by step 2: as enemy turns/moves, if player
       // enters the lit cone → immediate alert regardless of suspicion phase.
     }
 
-    // 5. Alert countdown
+    // 5. Alert pursuit + countdown.
+    // Step 2 has already pinned alertTimer to ALERT_FRAMES this frame if player is visible,
+    // so the decrement below cannot expire while LOS holds.
     if (e.state === 'alert') {
+      const pdx = player.x - e.x, pdy = player.y - e.y;
+      const pd2 = pdx * pdx + pdy * pdy;
+      if (pd2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+        if (hasLOS(e.x, e.y, player.x, player.y)) {
+          // Clear shot — straight-line chase. Stable targetAngle, no nav-graph detour.
+          const pd = Math.sqrt(pd2);
+          e.x += (pdx / pd) * e.patrolSpeed;
+          e.y += (pdy / pd) * e.patrolSpeed;
+          e.targetAngle = Math.atan2(pdx, -pdy);
+          pushOutOfWalls(e, ENEMY_RADIUS);
+          pushOutOfWalls(e, ENEMY_RADIUS);
+        } else {
+          // LOS broken — route around walls via nav graph, rebuilt each frame to track player.
+          e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
+          e.searchPathIndex = 0;
+          followNavPath(e);
+        }
+      }
       e.alertTimer--;
-      if (e.alertTimer <= 0) e.state = 'cautious';
+      if (e.alertTimer <= 0) {
+        if (e.lastKnownX !== null) {
+          e.state            = 'searching';
+          e.searchPath       = buildPath(e.x, e.y, e.lastKnownX, e.lastKnownY);
+          e.searchPathIndex  = 0;
+          e.searchSweepAccum = 0;
+        } else {
+          // Sound-only alert (never confirmed a sight) — resume patrol.
+          e.state = 'patrol';
+          e.cautiousTimer = CAUTIOUS_FRAMES;
+        }
+      }
+    }
+
+    // 5b. Searching — navigate nav path to lastKnown, then sweep ~270°.
+    // Sight re-acquisition during search is handled by step 2 (overrides to alert).
+    if (e.state === 'searching') {
+      if (followNavPath(e)) {
+        e.targetAngle      += SEARCH_SWEEP_RATE;
+        e.searchSweepAccum += SEARCH_SWEEP_RATE;
+        // Sweep done with no re-acquisition — resume patrol, lingering vigilance armed.
+        if (e.searchSweepAccum >= Math.PI * 1.5) {
+          e.state = 'patrol';
+          e.cautiousTimer = CAUTIOUS_FRAMES;
+        }
+      }
     }
 
     // 6. Patrol movement — only when in patrol state with a defined route
@@ -366,6 +511,8 @@ function updateEnemies() {
 
     const turnRate = (e.state === 'patrol') ? 0.04 : 0.10;
     e.angle = lerpAngle(e.angle, e.targetAngle, turnRate);
+
+    if (e.cautiousTimer > 0) e.cautiousTimer--;
   }
 }
 
@@ -422,7 +569,7 @@ function drawEnemies() {
   for (const e of enemies) {
     const isAlert     = e.state === 'alert';
     const isSuspicious = e.state === 'suspicious';
-    const isCautious  = e.state === 'cautious';
+    const isCautious  = e.state === 'searching' || (e.state === 'patrol' && e.cautiousTimer > 0);
     const isReacting  = e.reactionTimer > 0;
 
     // Reaction delay ring — contracting white circle shows the opportunity window

@@ -1,6 +1,6 @@
 # Feature 07 — Enemy AI State Machine
 
-**Status: PENDING**
+**Status: DONE**
 
 ---
 
@@ -19,12 +19,22 @@ F07 owns: **alert pursuit, alert timer refresh, SEARCHING state, nav graph BFS.*
 ## State Diagram
 
 ```
-patrol ──(detection)──→ suspicious ──(confirmed)──→ alert ──(loses sight)──→ searching ──(sweep done)──→ cautious
-   ↑                                                  ↑                           │
-   └──(suspicion timeout)                             └────(re-detected)──────────┘
+patrol ──(detection)──→ suspicious ──(confirmed)──→ alert ──(loses sight, has lastKnown)──→ searching ──(sweep done)──→ patrol
+   ↑                          │                       ↑                    │                                              │
+   │                          │                       └──(re-detected)─────┘                                              │
+   └──(suspicion timeout)─────┘                                                                                            │
+   │                                                                                                                       │
+   └──(alert expires, no lastKnown — sound-only) ←─────────────────────────────────────────────────────────────────────────┘
 ```
 
-`cautious` is permanent within the session — already implemented. All other transitions already implemented. F07 adds the `searching` state and fills in what `alert` does beyond facing the player.
+Every reactive state eventually resolves back to `patrol`. The original `cautious` state from the design is now modeled as a **lingering vigilance flag** (`cautiousTimer`, 30 s) that coexists with `patrol`:
+
+- Any reactive→patrol transition arms `cautiousTimer = CAUTIOUS_FRAMES` (1800 frames @ 60 fps).
+- While `cautiousTimer > 0`, sound during patrol skips the suspicion delay and snaps straight to alert.
+- The timer ticks down each frame regardless of state; after 30 s of no new reactive incidents the enemy fully relaxes.
+- Visually, an enemy renders as `cautious` whenever `state === 'searching'` or `state === 'patrol' && cautiousTimer > 0`.
+
+F07 adds the `searching` state and fills in what `alert` does beyond facing the player.
 
 ---
 
@@ -106,7 +116,19 @@ From `alert` when `alertTimer` expires and `lastKnownX/Y` is set.
 
 ## Nav Graph BFS
 
-Designed in the F06 doc, now implemented. Used for SEARCHING navigation to `lastKnownX/Y`. Patrol routes that use manually placed gap waypoints continue to work unchanged — `buildPath` is only called for reactive navigation.
+Designed in the F06 doc, now implemented. Used for reactive movement that needs to route around walls:
+
+- **Alert pursuit** — **LOS-first**: if `hasLOS(e, player)` then straight-line chase; otherwise `buildPath(e.x, e.y, player.x, player.y)` rebuilt each frame. Same-room visible-target pursuit avoids the nav-graph detour and keeps the enemy facing the player cleanly.
+- **Suspicion `moving`** — built once on phase entry to `suspicionSourceX/Y`.
+- **Suspicion `returning`** — built when transitioning into the phase, target `suspicionReturnX/Y`.
+- **SEARCHING navigate** — built once on alert→searching transition, target `lastKnownX/Y`.
+
+A shared `followNavPath(e)` helper advances the enemy one tick along `e.searchPath` (the field is reused across reactive states since they don't overlap). The helper:
+- Uses a while-loop so per-frame rebuilds don't oscillate on the start node.
+- **Skips a waypoint if `pushOutOfWalls` fully reverts the move** — prevents indefinite stuck-on-wall oscillation when a waypoint sits behind a wall corner.
+- Is bounded by `searchPath.length + 1` iterations so a fully-blocked path resolves to "arrived" rather than infinite-looping.
+
+Patrol routes are unchanged — manually placed gap waypoints continue to drive patrol movement.
 
 ### Nodes and edges
 
