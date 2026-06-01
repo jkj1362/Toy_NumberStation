@@ -2,12 +2,30 @@
 <html>
 <head>
   <style>
-    body { margin: 0; background: #111; display: grid; place-items: center; height: 100vh; }
-    canvas { background: #222; }
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #050505;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+    }
+
+    canvas {
+      width: min(100vw, calc(100vh * 16 / 9));
+      height: min(100vh, calc(100vw * 9 / 16));
+      background: #000;
+      display: block;
+    }
   </style>
 </head>
 <body>
-  <canvas id="game" width="1100" height="750"></canvas>
+  <canvas id="game" width="1920" height="1080"></canvas>
   <script src="enemy.js"></script>
   <script src="game.js"></script>
 </body>

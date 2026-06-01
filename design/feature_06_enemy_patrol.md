@@ -1,6 +1,6 @@
 # Feature 06 — Enemy Movement & Patrol
 
-**Status: PENDING**
+**Status: DONE** - implemented in `enemy.js` with hand-placed patrol waypoints. Automatic high-level patrol route expansion via `buildPatrolPath()` is deferred; reactive navigation now uses the shared `buildPath()` graph from Feature 07.
 
 ---
 

@@ -1,5 +1,16 @@
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const screenCtx = canvas.getContext('2d');
+
+const GAME_WIDTH = 1100;
+const GAME_HEIGHT = 750;
+const GAME_SCALE = Math.min(canvas.width / GAME_WIDTH, canvas.height / GAME_HEIGHT);
+const GAME_OFFSET_X = (canvas.width - GAME_WIDTH * GAME_SCALE) / 2;
+const GAME_OFFSET_Y = (canvas.height - GAME_HEIGHT * GAME_SCALE) / 2;
+
+const gameCanvas = document.createElement('canvas');
+gameCanvas.width = GAME_WIDTH;
+gameCanvas.height = GAME_HEIGHT;
+const ctx = gameCanvas.getContext('2d');
 
 const WALLS = [
   // Outer perimeter — entry gap x:430–570 at bottom
@@ -76,10 +87,10 @@ const EXFIL_RADIUS    = 40;
 // Precomputed wall segments and corners for visibility raycasting (static — walls never move)
 const WALL_SEGMENTS = (() => {
   const s = [
-    { x1: 0,            y1: 0,             x2: canvas.width,  y2: 0             },
-    { x1: canvas.width, y1: 0,             x2: canvas.width,  y2: canvas.height },
-    { x1: canvas.width, y1: canvas.height, x2: 0,             y2: canvas.height },
-    { x1: 0,            y1: canvas.height, x2: 0,             y2: 0             },
+    { x1: 0,          y1: 0,           x2: GAME_WIDTH, y2: 0           },
+    { x1: GAME_WIDTH, y1: 0,           x2: GAME_WIDTH, y2: GAME_HEIGHT },
+    { x1: GAME_WIDTH, y1: GAME_HEIGHT, x2: 0,          y2: GAME_HEIGHT },
+    { x1: 0,          y1: GAME_HEIGHT, x2: 0,          y2: 0           },
   ];
   for (const w of WALLS) {
     s.push({ x1: w.x,       y1: w.y,       x2: w.x + w.w, y2: w.y       });
@@ -93,7 +104,7 @@ const WALL_SEGMENTS = (() => {
 const WALL_CORNERS = (() => {
   const seen = new Set(), pts = [];
   const add = (x, y) => { const k = `${x},${y}`; if (!seen.has(k)) { seen.add(k); pts.push({ x, y }); } };
-  add(0, 0); add(canvas.width, 0); add(canvas.width, canvas.height); add(0, canvas.height);
+  add(0, 0); add(GAME_WIDTH, 0); add(GAME_WIDTH, GAME_HEIGHT); add(0, GAME_HEIGHT);
   for (const w of WALLS) {
     add(w.x, w.y); add(w.x + w.w, w.y); add(w.x + w.w, w.y + w.h); add(w.x, w.y + w.h);
   }
@@ -257,8 +268,8 @@ function update() {
   pushOutOfWalls(player, PLAYER_RADIUS);
   pushOutOfWalls(player, PLAYER_RADIUS);
   // Canvas bounds fallback
-  player.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width  - PLAYER_RADIUS, player.x));
-  player.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, player.y));
+  player.x = Math.max(PLAYER_RADIUS, Math.min(GAME_WIDTH  - PLAYER_RADIUS, player.x));
+  player.y = Math.max(PLAYER_RADIUS, Math.min(GAME_HEIGHT - PLAYER_RADIUS, player.y));
 
   if (player.x !== prevX || player.y !== prevY) notifyPlayerMoved();
 
@@ -366,7 +377,7 @@ function update() {
       }
     }
 
-    if (hit || hitsWall(p.x, p.y) || p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height) {
+    if (hit || hitsWall(p.x, p.y) || p.x < 0 || p.x > GAME_WIDTH || p.y < 0 || p.y > GAME_HEIGHT) {
       projectiles.splice(i, 1);
     }
   }
@@ -374,7 +385,7 @@ function update() {
 
 function drawFloor() {
   ctx.fillStyle = '#1e1e1e';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 }
 
 function drawWalls() {
@@ -499,9 +510,9 @@ const lightCtx = lightCanvas.getContext('2d');
 function drawFog() {
   const PROXIMITY_RADIUS = 50;
 
-  if (fogCanvas.width !== canvas.width || fogCanvas.height !== canvas.height) {
-    fogCanvas.width = canvas.width;
-    fogCanvas.height = canvas.height;
+  if (fogCanvas.width !== GAME_WIDTH || fogCanvas.height !== GAME_HEIGHT) {
+    fogCanvas.width = GAME_WIDTH;
+    fogCanvas.height = GAME_HEIGHT;
   }
 
   fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
@@ -617,9 +628,9 @@ function drawExfilPoints() {
 function drawLighting() {
   const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
 
-  if (lightCanvas.width !== canvas.width || lightCanvas.height !== canvas.height) {
-    lightCanvas.width = canvas.width;
-    lightCanvas.height = canvas.height;
+  if (lightCanvas.width !== GAME_WIDTH || lightCanvas.height !== GAME_HEIGHT) {
+    lightCanvas.width = GAME_WIDTH;
+    lightCanvas.height = GAME_HEIGHT;
   }
 
   lightCtx.clearRect(0, 0, lightCanvas.width, lightCanvas.height);
@@ -670,7 +681,7 @@ function drawLighting() {
 }
 
 function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
   drawFloor();
   drawWalls();
   drawLamps();
@@ -685,6 +696,16 @@ function draw() {
   drawGapExits();
   drawPickup();
   if (hasMapKnowledge) drawMapGeometry();
+
+  screenCtx.fillStyle = '#000';
+  screenCtx.fillRect(0, 0, canvas.width, canvas.height);
+  screenCtx.drawImage(
+    gameCanvas,
+    GAME_OFFSET_X,
+    GAME_OFFSET_Y,
+    GAME_WIDTH * GAME_SCALE,
+    GAME_HEIGHT * GAME_SCALE
+  );
 }
 
 function loop() {
