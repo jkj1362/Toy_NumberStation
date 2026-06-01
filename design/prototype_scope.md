@@ -30,7 +30,7 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | Enemy sight and light-gated LOS detection | Done |
 | Enemy sound detection and suspicion behavior | Done |
 | Enemy patrol, alert pursuit, search, and cautious behavior | Done |
-| Fixed FHD presentation canvas with scaled gameplay surface | Done |
+| Fixed FHD internal gameplay resolution and presentation canvas | Done |
 
 ## Feature Build Order
 
@@ -54,4 +54,4 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | Objective type | Physical pickup, then exfil |
 | Enemy movement | Patrol waypoints |
 | Enemy AI consequence | State changes and pursuit for now; no full game-over flow yet |
-| Presentation target | Fixed 1920x1080 screen canvas; existing gameplay surface scales inside it |
+| Presentation target | Fixed 1920x1080 internal world and screen canvas; CSS scales that FHD frame to the monitor |

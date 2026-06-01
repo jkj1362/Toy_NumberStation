@@ -1,8 +1,13 @@
 const canvas = document.getElementById('game');
 const screenCtx = canvas.getContext('2d');
 
-const GAME_WIDTH = 1100;
-const GAME_HEIGHT = 750;
+const DESIGN_WIDTH = 1100;
+const DESIGN_HEIGHT = 750;
+const GAME_WIDTH = 1920;
+const GAME_HEIGHT = 1080;
+const GAME_SCALE_X = GAME_WIDTH / DESIGN_WIDTH;
+const GAME_SCALE_Y = GAME_HEIGHT / DESIGN_HEIGHT;
+const GAME_SCALE_UNIT = (GAME_SCALE_X + GAME_SCALE_Y) / 2;
 const GAME_SCALE = Math.min(canvas.width / GAME_WIDTH, canvas.height / GAME_HEIGHT);
 const GAME_OFFSET_X = (canvas.width - GAME_WIDTH * GAME_SCALE) / 2;
 const GAME_OFFSET_Y = (canvas.height - GAME_HEIGHT * GAME_SCALE) / 2;
@@ -11,6 +16,16 @@ const gameCanvas = document.createElement('canvas');
 gameCanvas.width = GAME_WIDTH;
 gameCanvas.height = GAME_HEIGHT;
 const ctx = gameCanvas.getContext('2d');
+
+function scaleGameX(x) { return x * GAME_SCALE_X; }
+function scaleGameY(y) { return y * GAME_SCALE_Y; }
+function scaleGameUnit(v) { return v * GAME_SCALE_UNIT; }
+function scaleGameRect(r) {
+  return { x: scaleGameX(r.x), y: scaleGameY(r.y), w: scaleGameX(r.w), h: scaleGameY(r.h) };
+}
+function scaleGamePoint(p) {
+  return { ...p, x: scaleGameX(p.x), y: scaleGameY(p.y) };
+}
 
 const WALLS = [
   // Outer perimeter — entry gap x:430–570 at bottom
@@ -36,18 +51,18 @@ const WALLS = [
   // x=900 is within corridor right (x=860–1082) so top connects cleanly
   { x:  900, y: 440, w:  18, h: 100 },
   { x:  900, y: 640, w:  18, h:  92 },
-];
+].map(scaleGameRect);
 
-const PLAYER_START = { x: 500, y: 680 };
+const PLAYER_START = scaleGamePoint({ x: 500, y: 680 });
 
 // x, y = center of character; angle = 0 means facing up
-const player = { x: PLAYER_START.x, y: PLAYER_START.y, speed: 4, angle: 0, targetAngle: 0 };
+const player = { x: PLAYER_START.x, y: PLAYER_START.y, speed: scaleGameUnit(4), angle: 0, targetAngle: 0 };
 const keys = {};
 const projectiles = [];
 let rtWasPressed = false;
 
 
-const LAMP_HIT_RADIUS = 10;
+const LAMP_HIT_RADIUS = scaleGameUnit(10);
 // Rules: (1) at least one lamp per room, (2) same-wall lamp spacing >= radius
 // Radius = 200. Same-wall gaps: top/corridor-S x-gaps are 380 & 340; lobby N gap is 300. All >= 200.
 const LAMPS = [
@@ -69,20 +84,28 @@ const LAMPS = [
   { x:  18, y: 630, wallSide: 'W', radius: 200, color: '#ffdc96', active: true },
   // Room F — right perimeter wall
   { x:1082, y: 590, wallSide: 'E', radius: 200, color: '#ffdc96', active: true },
-];
+].map(lamp => ({ ...scaleGamePoint(lamp), radius: scaleGameUnit(lamp.radius) }));
 
 // Wall duct/window exits — manually activated bonus exfil points
 const WALL_GAP_EXITS = [
   { x:    9, y: 190, roomId: 'room_a',  activated: false }, // left perimeter duct, Room A
   { x: 1091, y: 190, roomId: 'room_bc', activated: false }, // right perimeter duct, Room B/C
-];
+].map(scaleGamePoint);
 let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
-const PLAYER_RADIUS = 28; // outermost extent of the character shape
+const PLAYER_RADIUS = scaleGameUnit(28); // outermost extent of the character shape
 const VISION_ANGLE = Math.PI * 2 / 3; // 120° total field of view (tune between PI/2 and 5PI/6 for 90°–150°)
 
-const INTERACT_RADIUS = 30;
-const EXFIL_RADIUS    = 40;
+const INTERACT_RADIUS = scaleGameUnit(30);
+const EXFIL_RADIUS    = scaleGameUnit(40);
+const PLAYER_GLOW_RADIUS = scaleGameUnit(80);
+const PLAYER_PROXIMITY_RADIUS = scaleGameUnit(50);
+const LAMP_OFFSETS = {
+  N: [0, scaleGameY(8)],
+  S: [0, -scaleGameY(8)],
+  E: [-scaleGameX(8), 0],
+  W: [scaleGameX(8), 0],
+};
 
 // Precomputed wall segments and corners for visibility raycasting (static — walls never move)
 const WALL_SEGMENTS = (() => {
@@ -118,7 +141,7 @@ const ROOMS = [
   { id: 'corridor', cx: 589, cy: 229, startingSpace: false },
   { id: 'room_bc',  cx: 930, cy: 229, startingSpace: false },
   { id: 'room_f',   cx: 991, cy: 590, startingSpace: false },
-];
+].map(room => ({ ...room, cx: scaleGameX(room.cx), cy: scaleGameY(room.cy) }));
 
 // Mission state
 let pickup          = { x: 0, y: 0, roomId: '', collected: false, visibleToPlayer: false };
@@ -139,12 +162,11 @@ function inVisionCone(wx, wy) {
 function isLit(wx, wy) {
   // Player's own ambient glow
   const pdx = wx - player.x, pdy = wy - player.y;
-  if (pdx * pdx + pdy * pdy <= 80 * 80) return true;
+  if (pdx * pdx + pdy * pdy <= PLAYER_GLOW_RADIUS * PLAYER_GLOW_RADIUS) return true;
   // Active lamp coverage
-  const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
   for (const lamp of LAMPS) {
     if (!lamp.active) continue;
-    const [odx, ody] = offsets[lamp.wallSide];
+    const [odx, ody] = LAMP_OFFSETS[lamp.wallSide];
     const dx = wx - (lamp.x + odx), dy = wy - (lamp.y + ody);
     if (dx * dx + dy * dy <= lamp.radius * lamp.radius) return true;
   }
@@ -154,15 +176,14 @@ function isLit(wx, wy) {
 // Lamp-only variant — excludes the player's self-glow. Used by enemy detection so
 // the player's ambient light doesn't make them permanently visible to guards.
 function isLitByLamps(wx, wy) {
-  const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
   for (const lamp of LAMPS) {
     if (!lamp.active) continue;
     // Half-plane clip — mirrors the rect clip in drawLighting so detection matches visuals
-    if (lamp.wallSide === 'N' && wy < lamp.y - 18) continue; // N lamp lights downward only
-    if (lamp.wallSide === 'S' && wy > lamp.y + 18) continue; // S lamp lights upward only
-    if (lamp.wallSide === 'E' && wx > lamp.x + 18) continue; // E lamp lights leftward only
-    if (lamp.wallSide === 'W' && wx < lamp.x - 18) continue; // W lamp lights rightward only
-    const [odx, ody] = offsets[lamp.wallSide];
+    if (lamp.wallSide === 'N' && wy < lamp.y - scaleGameY(18)) continue; // N lamp lights downward only
+    if (lamp.wallSide === 'S' && wy > lamp.y + scaleGameY(18)) continue; // S lamp lights upward only
+    if (lamp.wallSide === 'E' && wx > lamp.x + scaleGameX(18)) continue; // E lamp lights leftward only
+    if (lamp.wallSide === 'W' && wx < lamp.x - scaleGameX(18)) continue; // W lamp lights rightward only
+    const [odx, ody] = LAMP_OFFSETS[lamp.wallSide];
     const dx = wx - (lamp.x + odx), dy = wy - (lamp.y + ody);
     if (dx * dx + dy * dy <= lamp.radius * lamp.radius) return true;
   }
@@ -182,7 +203,7 @@ function initPickup() {
 
 function initExfil() {
   exfilPoints.length = 0;
-  exfilPoints.push({ x: 500, y: 741, type: 'primary', active: false, discovered: true });
+  exfilPoints.push(scaleGamePoint({ x: 500, y: 741, type: 'primary', active: false, discovered: true }));
 }
 
 function pushOutOfWalls(entity, radius) {
@@ -286,10 +307,10 @@ function update() {
     const dx = Math.sin(player.angle);
     const dy = -Math.cos(player.angle);
     projectiles.push({
-      x: player.x + dx * 20,
-      y: player.y + dy * 20,
-      vx: dx * 25,
-      vy: dy * 25,
+      x: player.x + dx * scaleGameUnit(20),
+      y: player.y + dy * scaleGameUnit(20),
+      vx: dx * scaleGameUnit(25),
+      vy: dy * scaleGameUnit(25),
       angle: player.angle,
     });
     emitSound(player.x, player.y, GUNSHOT_RADIUS, true);
@@ -409,6 +430,7 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.angle);
+  ctx.scale(scaleGameUnit(1), scaleGameUnit(1));
 
   // Shoulders (slightly behind center in local space, +y = back)
   ctx.fillStyle = '#3a8fd4';
@@ -441,14 +463,14 @@ function drawPlayer() {
 
 function drawProjectiles() {
   ctx.strokeStyle = '#ffe066';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = scaleGameUnit(2);
   for (const p of projectiles) {
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(p.angle);
     ctx.beginPath();
-    ctx.moveTo(0, -8);
-    ctx.lineTo(0, 8);
+    ctx.moveTo(0, -scaleGameUnit(8));
+    ctx.lineTo(0, scaleGameUnit(8));
     ctx.stroke();
     ctx.restore();
   }
@@ -508,7 +530,7 @@ const lightCanvas = document.createElement('canvas');
 const lightCtx = lightCanvas.getContext('2d');
 
 function drawFog() {
-  const PROXIMITY_RADIUS = 50;
+  const PROXIMITY_RADIUS = PLAYER_PROXIMITY_RADIUS;
 
   if (fogCanvas.width !== GAME_WIDTH || fogCanvas.height !== GAME_HEIGHT) {
     fogCanvas.width = GAME_WIDTH;
@@ -545,7 +567,7 @@ function drawLamps() {
   for (const lamp of LAMPS) {
     ctx.fillStyle = lamp.active ? lamp.color : '#444';
     ctx.beginPath();
-    ctx.arc(lamp.x, lamp.y, 8, 0, Math.PI * 2);
+    ctx.arc(lamp.x, lamp.y, scaleGameUnit(8), 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -557,6 +579,7 @@ function drawPickup() {
     ctx.save();
     ctx.translate(pickup.x, pickup.y);
     ctx.rotate(Math.PI / 4);
+    ctx.scale(scaleGameUnit(1), scaleGameUnit(1));
     ctx.fillStyle = '#ffe066';
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
@@ -567,10 +590,10 @@ function drawPickup() {
     // ! hint icon — always visible through fog
     ctx.save();
     ctx.fillStyle = '#ffe066';
-    ctx.font = 'bold 20px monospace';
+    ctx.font = `bold ${scaleGameUnit(20)}px monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('!', pickup.x, pickup.y - 22);
+    ctx.fillText('!', pickup.x, pickup.y - scaleGameUnit(22));
     ctx.restore();
   }
 }
@@ -580,14 +603,14 @@ function drawGapExits() {
     if (!inVisionCone(gap.x, gap.y) || !isLit(gap.x, gap.y)) continue;
     if (gap.activated) continue; // activated gaps are rendered by drawExfilPoints()
     ctx.strokeStyle = '#ffe066';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = scaleGameUnit(2);
     ctx.beginPath();
-    ctx.arc(gap.x, gap.y, 10, 0, Math.PI * 2);
+    ctx.arc(gap.x, gap.y, scaleGameUnit(10), 0, Math.PI * 2);
     ctx.stroke();
     ctx.strokeStyle = '#ffe066';
     ctx.beginPath();
-    ctx.moveTo(gap.x, gap.y - 5);
-    ctx.lineTo(gap.x, gap.y + 5);
+    ctx.moveTo(gap.x, gap.y - scaleGameUnit(5));
+    ctx.lineTo(gap.x, gap.y + scaleGameUnit(5));
     ctx.stroke();
   }
 }
@@ -599,35 +622,33 @@ function drawExfilPoints() {
     // Testing: always show secondary location as a dim circle even when undiscovered
     if (ef.type === 'secondary' && !ef.discovered) {
       ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = scaleGameUnit(2);
       ctx.beginPath();
-      ctx.arc(ef.x, ef.y, 20, 0, Math.PI * 2);
+      ctx.arc(ef.x, ef.y, scaleGameUnit(20), 0, Math.PI * 2);
       ctx.stroke();
       continue;
     }
 
     // Ground ring
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = scaleGameUnit(2);
     ctx.beginPath();
-    ctx.arc(ef.x, ef.y, 20, 0, Math.PI * 2);
+    ctx.arc(ef.x, ef.y, scaleGameUnit(20), 0, Math.PI * 2);
     ctx.stroke();
 
     // Down-pointing chevron
     ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = scaleGameUnit(3);
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    ctx.moveTo(ef.x - 10, ef.y - 6);
-    ctx.lineTo(ef.x,      ef.y + 8);
-    ctx.lineTo(ef.x + 10, ef.y - 6);
+    ctx.moveTo(ef.x - scaleGameUnit(10), ef.y - scaleGameUnit(6));
+    ctx.lineTo(ef.x,                     ef.y + scaleGameUnit(8));
+    ctx.lineTo(ef.x + scaleGameUnit(10), ef.y - scaleGameUnit(6));
     ctx.stroke();
   }
 }
 
 function drawLighting() {
-  const offsets = { N: [0, 8], S: [0, -8], E: [-8, 0], W: [8, 0] };
-
   if (lightCanvas.width !== GAME_WIDTH || lightCanvas.height !== GAME_HEIGHT) {
     lightCanvas.width = GAME_WIDTH;
     lightCanvas.height = GAME_HEIGHT;
@@ -641,17 +662,17 @@ function drawLighting() {
   lightCtx.globalCompositeOperation = 'destination-out';
   for (const lamp of LAMPS) {
     if (!lamp.active) continue;
-    const [odx, ody] = offsets[lamp.wallSide];
+    const [odx, ody] = LAMP_OFFSETS[lamp.wallSide];
     const cx = lamp.x + odx;
     const cy = lamp.y + ody;
 
     // Clip to the half-plane the lamp faces so light can't cross the wall it's on
     lightCtx.save();
     lightCtx.beginPath();
-    if      (lamp.wallSide === 'N') lightCtx.rect(0, lamp.y - 18, W, H);
-    else if (lamp.wallSide === 'S') lightCtx.rect(0, 0,          W, lamp.y + 18);
-    else if (lamp.wallSide === 'E') lightCtx.rect(0, 0,          lamp.x + 18, H);
-    else                            lightCtx.rect(lamp.x - 18, 0, W, H);
+    if      (lamp.wallSide === 'N') lightCtx.rect(0, lamp.y - scaleGameY(18), W, H);
+    else if (lamp.wallSide === 'S') lightCtx.rect(0, 0,                         W, lamp.y + scaleGameY(18));
+    else if (lamp.wallSide === 'E') lightCtx.rect(0, 0,                         lamp.x + scaleGameX(18), H);
+    else                            lightCtx.rect(lamp.x - scaleGameX(18), 0,   W, H);
     lightCtx.clip();
 
     const grad = lightCtx.createRadialGradient(cx, cy, 0, cx, cy, lamp.radius);
@@ -666,13 +687,13 @@ function drawLighting() {
   }
 
   // Player emits a small ambient glow — always visible as a light source
-  const pg = lightCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, 80);
+  const pg = lightCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, PLAYER_GLOW_RADIUS);
   pg.addColorStop(0,   'rgba(255,255,255,1)');
   pg.addColorStop(0.4, 'rgba(255,255,255,1)');
   pg.addColorStop(1,   'rgba(255,255,255,0)');
   lightCtx.fillStyle = pg;
   lightCtx.beginPath();
-  lightCtx.arc(player.x, player.y, 80, 0, Math.PI * 2);
+  lightCtx.arc(player.x, player.y, PLAYER_GLOW_RADIUS, 0, Math.PI * 2);
   lightCtx.fill();
 
   lightCtx.globalCompositeOperation = 'source-over';

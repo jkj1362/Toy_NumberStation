@@ -1,207 +1,311 @@
-# Feature 07 — Enemy AI State Machine
+# Feature 07 - Enemy AI State Machine
 
-**Status: DONE**
+**Status: REVISION PLANNED** - base patrol/suspicion/alert/search is implemented, but alert behavior now needs enemy archetypes.
 
 ---
 
 ## Overview
 
-Feature 07 completes the enemy AI behavior loop. Features 04–06 built detection predicates (when to change states) and patrol movement (what enemies do when unalerted). Feature 07 adds what enemies do when alerted: chase the player, lose sight, search the last known location, then give up.
+Feature 07 owns what enemies do after detection. The first implementation gave every enemy the same alert behavior: chase the player, refresh alert while the player is visible, search the last known position after losing sight, then return to patrol with lingering caution.
 
-Two pieces that slipped into F06 at user request are already implemented and stay there:
-- Two-phase detection (suspicious/alert, reaction delay) — F05/F06
-- Suspicion investigation movement (level 1/2 phases) — F06
+That behavior is still valid, but it should now become the **melee enemy archetype**, not the universal enemy response. Feature 07 is being expanded into an archetype-aware state machine:
 
-F07 owns: **alert pursuit, alert timer refresh, SEARCHING state, nav graph BFS.**
+- **Melee weapon enemy** - closes distance and overlaps the player, matching current behavior.
+- **Normal shooting enemy** - moves until it reaches a dedicated shooting range, then repeatedly fires with imperfect aim.
+- **Precision shooting enemy** - future sniper archetype. Longer firing interval, near-perfect aimed line. Do not implement fully until the player's aim system is improved.
+
+The detection pipeline remains shared. The difference is in the `alert` state's combat behavior.
 
 ---
 
-## State Diagram
+## Current Shared State Flow
 
+```text
+patrol
+  -> suspicious
+  -> alert
+  -> searching
+  -> patrol with cautiousTimer
 ```
-patrol ──(detection)──→ suspicious ──(confirmed)──→ alert ──(loses sight, has lastKnown)──→ searching ──(sweep done)──→ patrol
-   ↑                          │                       ↑                    │                                              │
-   │                          │                       └──(re-detected)─────┘                                              │
-   └──(suspicion timeout)─────┘                                                                                            │
-   │                                                                                                                       │
-   └──(alert expires, no lastKnown — sound-only) ←─────────────────────────────────────────────────────────────────────────┘
-```
 
-Every reactive state eventually resolves back to `patrol`. The original `cautious` state from the design is now modeled as a **lingering vigilance flag** (`cautiousTimer`, 30 s) that coexists with `patrol`:
+Existing implemented behavior to keep:
 
-- Any reactive→patrol transition arms `cautiousTimer = CAUTIOUS_FRAMES` (1800 frames @ 60 fps).
-- While `cautiousTimer > 0`, sound during patrol skips the suspicion delay and snaps straight to alert.
-- The timer ticks down each frame regardless of state; after 30 s of no new reactive incidents the enemy fully relaxes.
-- Visually, an enemy renders as `cautious` whenever `state === 'searching'` or `state === 'patrol' && cautiousTimer > 0`.
+- Vision detection immediately enters `alert`.
+- Sound enters `suspicious`; a second stimulus confirms `alert`.
+- `alertTimer` refreshes while the player is visible.
+- When alert expires with a last known player position, enemy enters `searching`.
+- `searching` navigates to `lastKnownX/Y`, performs a sweep, then returns to `patrol`.
+- `cautiousTimer` makes recently reactive guards skip suspicion and snap to alert on sound.
 
-F07 adds the `searching` state and fills in what `alert` does beyond facing the player.
+The revision changes only what an enemy does while `state === 'alert'`.
 
 ---
 
-## Scope Boundary (F04–F07)
+## Enemy Archetypes
 
-| Feature | Owns |
-|---------|------|
-| F04 | Detection predicates — cone, LOS, proximity, light check |
-| F05 | Sound propagation, two-phase detection triggers |
-| F06 | Patrol movement, suspicion investigation movement (bonus) |
-| **F07** | **Alert pursuit, alert timer refresh, SEARCHING state, nav graph BFS** |
+### 1. Melee Weapon Enemy
 
----
+**Status:** implemented implicitly as current behavior.
 
-## Alert Timer Refresh
+Melee enemies are the existing guards:
 
-**Current gap:** `alertTimer` (180 frames) counts down from state entry. If the player stays visible the entire time, the enemy still drops to `cautious` after 3 seconds — even though the threat never left.
+- On detection, move directly toward the player.
+- If line of sight is clear, chase straight.
+- If line of sight is blocked, route through the nav graph.
+- No combat resolution yet; overlapping the player is acceptable until damage/death is engineered.
 
-**Fix:** In the vision cone detection step, when `e.state === 'alert'`, refresh `alertTimer = ALERT_FRAMES` every frame the player is visible. The enemy stays alert continuously as long as it has eyes on the player.
+This should become explicit data:
 
 ```javascript
-if (enemyCanSeeCone(e)) {
-  e.state      = 'alert';
-  e.alertTimer = ALERT_FRAMES; // refresh on every frame — not just on entry
-  e.targetAngle = Math.atan2(player.x - e.x, -(player.y - e.y));
-  e.lastKnownX  = player.x;
-  e.lastKnownY  = player.y;
+{
+  archetype: 'melee',
+  attackRange: 0,
 }
 ```
 
+Implementation rule:
+
+```text
+if e.archetype === 'melee':
+  chase player exactly as current alert pursuit does
+```
+
 ---
 
-## Alert Pursuit
+### 2. Normal Shooting Enemy
 
-While `state === 'alert'`, the enemy actively moves toward the player. Uses the same movement primitives as patrol (`patrolSpeed`, `pushOutOfWalls`).
+**Status:** next implementation target.
+
+Normal shooters should not blindly overlap the player. They have a dedicated shooting range. When alerted:
+
+1. If the player is outside shooting range, approach.
+2. If the player is inside shooting range and line of sight is clear, stop and shoot.
+3. If line of sight is blocked, navigate until line of sight is restored.
+4. Fire repeatedly on a cooldown.
+5. Shots use aim spread so enemies do not hit too reliably.
+
+Suggested data:
 
 ```javascript
-if (e.state === 'alert') {
-  const dx = player.x - e.x, dy = player.y - e.y;
-  const dist2 = dx * dx + dy * dy;
-  if (dist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
-    const dist = Math.sqrt(dist2);
-    e.x += (dx / dist) * e.patrolSpeed;
-    e.y += (dy / dist) * e.patrolSpeed;
-    pushOutOfWalls(e, ENEMY_RADIUS);
-    pushOutOfWalls(e, ENEMY_RADIUS);
+{
+  archetype: 'shooter',
+  shootingRange: 360,
+  shootingRangeTolerance: 40,
+  shotCooldownFrames: 75,
+  shotTimer: 0,
+  shotSpeed: 25,
+  aimSpreadRadians: 0.16,
+}
+```
+
+FHD note: numeric distances in code should use the current scaling helpers, because the internal world is now 1920x1080.
+
+#### Alert Behavior
+
+```text
+if e.archetype === 'shooter':
+  face player
+
+  if no LOS:
+    follow nav path toward player
+    do not shoot
+
+  else if distance > shootingRange:
+    approach until shootingRange is reached
+
+  else:
+    hold position
+    fire when shotTimer reaches 0
+```
+
+Optional later improvement:
+
+```text
+if distance < shootingRange - shootingRangeTolerance:
+  back away or strafe
+```
+
+For the first pass, do not add retreat/strafe. Stopping at range is enough.
+
+#### Aim Spread / Hit Probability
+
+Normal shooter accuracy should be imperfect. Prefer a physical miss model over a pure dice roll:
+
+```javascript
+const baseAngle = Math.atan2(player.x - e.x, -(player.y - e.y));
+const spread = (Math.random() * 2 - 1) * e.aimSpreadRadians;
+const shotAngle = baseAngle + spread;
+```
+
+This gives an understandable result: the enemy "tries" to shoot the player, but spread makes some shots miss naturally. Larger `aimSpreadRadians` means lower accuracy.
+
+If we later need explicit hit probability, add it as a tuning layer:
+
+```javascript
+hitChance: 0.35
+```
+
+But the first pass should use spread only.
+
+#### Enemy Projectile Model
+
+Enemy shots can use the same movement logic as player projectiles, but should live in a separate array so collision rules stay clear:
+
+```javascript
+const enemyProjectiles = [];
+```
+
+Suggested projectile shape:
+
+```javascript
+{
+  x, y,
+  vx, vy,
+  angle,
+  owner: 'enemy',
+}
+```
+
+Initial collision behavior:
+
+- Wall collision removes the projectile.
+- Player collision can be logged or visually indicated until health/death exists.
+- Do not add a full health system as part of this pass.
+
+---
+
+### 3. Precision Shooting Enemy
+
+**Status:** base data only, do not implement full behavior yet.
+
+Precision shooters are future snipers. They should eventually:
+
+- Have longer shooting range than normal shooters.
+- Fire less often.
+- Aim along a clear line.
+- Punish the player for staying in the shooting line.
+- Reuse the improved player aim mechanic once that exists.
+
+For now, only reserve the archetype and data shape:
+
+```javascript
+{
+  archetype: 'precision',
+  shootingRange: 900,
+  shotCooldownFrames: 180,
+  aimSpreadRadians: 0,
+}
+```
+
+Implementation rule for now:
+
+```text
+if e.archetype === 'precision':
+  use shooter behavior temporarily, or leave unassigned in INITIAL_ENEMIES
+```
+
+Do not place precision enemies in the active level yet.
+
+---
+
+## Data Model Additions
+
+Add designer-set fields to `INITIAL_ENEMIES`:
+
+```javascript
+{
+  archetype: 'melee' | 'shooter' | 'precision',
+  shootingRange: 0,
+  shootingRangeTolerance: 0,
+  shotCooldownFrames: 0,
+  shotSpeed: 0,
+  aimSpreadRadians: 0,
+}
+```
+
+Add runtime fields in `resetEnemies()`:
+
+```javascript
+{
+  shotTimer: 0,
+}
+```
+
+Default rules:
+
+- Missing `archetype` defaults to `'melee'`.
+- Shooting fields only matter for `'shooter'` and future `'precision'`.
+- Current enemies should initially remain melee unless explicitly reassigned.
+
+---
+
+## Alert Behavior Refactor
+
+Current alert logic is a single pursuit block. Refactor it into small helpers:
+
+```javascript
+function updateAlertBehavior(e) {
+  if (e.archetype === 'shooter') {
+    updateShooterAlert(e);
+  } else if (e.archetype === 'precision') {
+    updatePrecisionAlert(e); // placeholder for now
+  } else {
+    updateMeleeAlert(e);
   }
 }
 ```
 
-`targetAngle` is already set toward the player by the detection step — the enemy faces and moves in the same direction.
+Shared alert countdown remains outside these helpers:
 
-When `alertTimer` reaches 0 (player broke detection long enough):
-- If `lastKnownX/Y` is set → transition to `searching`, build nav path to last known position
-- If no last known position (edge case) → `cautious` directly
-
-**Future:** Feature 08 can swap `e.patrolSpeed` for a faster `chaseSpeed` without structural changes.
-
----
-
-## SEARCHING State
-
-New state between `alert` and `cautious`. Enemy knows roughly where the player was; makes one investigative sweep before giving up.
-
-### Entry
-From `alert` when `alertTimer` expires and `lastKnownX/Y` is set.
-- Call `buildPath(e.x, e.y, e.lastKnownX, e.lastKnownY)` → store in `e.searchPath`
-- Set `e.searchPathIndex = 0`, `e.searchSweepAccum = 0`
-
-### Behavior phases
-1. **Navigate** — follow `searchPath` waypoints to `lastKnownX/Y` using patrol movement
-2. **Sweep** — on arrival, rotate ~270° (wider than suspicion search sweep of 180°)
-3. **Resolve** — if `enemyCanSeeCone(e)` fires at any point → back to `alert`; if sweep completes → `cautious`
-
-### Detection during search
-`enemyCanSeeCone(e)` runs every frame (step 2 of `updateEnemies`). If the player is spotted while the enemy is navigating or sweeping, step 2 immediately fires `alert` — no additional check needed in the searching block.
-
----
-
-## Nav Graph BFS
-
-Designed in the F06 doc, now implemented. Used for reactive movement that needs to route around walls:
-
-- **Alert pursuit** — **LOS-first**: if `hasLOS(e, player)` then straight-line chase; otherwise `buildPath(e.x, e.y, player.x, player.y)` rebuilt each frame. Same-room visible-target pursuit avoids the nav-graph detour and keeps the enemy facing the player cleanly.
-- **Suspicion `moving`** — built once on phase entry to `suspicionSourceX/Y`.
-- **Suspicion `returning`** — built when transitioning into the phase, target `suspicionReturnX/Y`.
-- **SEARCHING navigate** — built once on alert→searching transition, target `lastKnownX/Y`.
-
-A shared `followNavPath(e)` helper advances the enemy one tick along `e.searchPath` (the field is reused across reactive states since they don't overlap). The helper:
-- Uses a while-loop so per-frame rebuilds don't oscillate on the start node.
-- **Skips a waypoint if `pushOutOfWalls` fully reverts the move** — prevents indefinite stuck-on-wall oscillation when a waypoint sits behind a wall corner.
-- Is bounded by `searchPath.length + 1` iterations so a fully-blocked path resolves to "arrived" rather than infinite-looping.
-
-Patrol routes are unchanged — manually placed gap waypoints continue to drive patrol movement.
-
-### Nodes and edges
-
-```javascript
-const NAV_NODES = {
-  lobby:          { x: 460, y: 590 },
-  gap_corr_left:  { x: 270, y: 449 }, // corridor wall left gap
-  gap_corr_right: { x: 819, y: 449 }, // corridor wall right gap
-  corridor:       { x: 589, y: 229 },
-  gap_room_a:     { x: 409, y: 295 }, // Room A east wall gap
-  room_a:         { x: 200, y: 229 },
-  gap_room_bc:    { x: 769, y: 210 }, // Room B/C divider gap
-  room_bc:        { x: 930, y: 229 },
-  gap_room_f:     { x: 909, y: 590 }, // Room F west wall gap
-  room_f:         { x: 991, y: 590 },
-};
-
-const NAV_EDGES = [
-  ['lobby',          'gap_corr_left'],
-  ['gap_corr_left',  'corridor'],
-  ['lobby',          'gap_corr_right'],
-  ['gap_corr_right', 'gap_room_f'],
-  ['gap_room_f',     'room_f'],
-  ['corridor',       'gap_room_a'],
-  ['gap_room_a',     'room_a'],
-  ['corridor',       'gap_room_bc'],
-  ['gap_room_bc',    'room_bc'],
-];
-```
-
-### `buildPath(fromX, fromY, toX, toY)`
-
-```
-1. Find nearest NAV_NODE to (fromX, fromY) → startNode
-2. Find nearest NAV_NODE to (toX, toY) → endNode
-3. BFS from startNode to endNode along NAV_EDGES
-4. Return ordered array of {x, y} waypoints (nav nodes along path + final destination)
-```
-
-Returns `[]` if from and to are in the same nav node (enemy is already there — skip navigation, go straight to sweep).
-
----
-
-## Enemy Data Model Additions
-
-```javascript
-// Added to resetEnemies():
-lastKnownX:      0,  // player position at last confirmed sighting
-lastKnownY:      0,
-searchPath:      [], // nav waypoints to last known position
-searchPathIndex: 0,  // current waypoint index in searchPath
-searchSweepAccum: 0, // accumulated rotation during search sweep at destination
+```text
+1. Detect/refresh alert and lastKnown.
+2. Run archetype-specific alert behavior.
+3. Decrement alertTimer only if player is not currently visible.
+4. Expire into searching/patrol as current implementation does.
 ```
 
 ---
 
-## `updateEnemies()` Changes Summary
+## Proposed First Implementation Scope
 
-| Step | Current | F07 change |
-|------|---------|------------|
-| Step 2 (vision cone) | Sets alert on entry only | Also refreshes `alertTimer` + updates `lastKnownX/Y` every frame |
-| Step 5 (alert countdown) | Expiry → `cautious` | Expiry → `searching` (with `buildPath`) if `lastKnownX/Y` set; else `cautious` |
-| New step 5b | — | SEARCHING block: navigate `searchPath`, sweep on arrival, sweep done → `cautious` |
-| Step 6 (patrol movement) | Runs when `patrol` state | Add alert pursuit block: moves toward player when `alert` |
+Implement only:
+
+- Explicit `archetype: 'melee'` support.
+- Shooter archetype with range holding and repeated spread shots.
+- Enemy projectile array, update, draw, and wall collision.
+- Temporary player-hit handling, such as console log or visual flash.
+- No precision enemy placement.
+- No player health/death system.
+- No retreat, cover, strafing, reload animation, or ammo economy.
 
 ---
 
 ## Visual Feedback
 
-No new visual states needed — `alert` (orange + `!`) and `cautious` (muted + `?`) already exist. `searching` uses the same visual as `cautious` since the player may not know if the enemy is still actively searching or has given up. Could be differentiated later (e.g., amber `?` while navigating, grey `?` on sweep).
+Current enemy state colors remain:
+
+| State | Visual |
+|-------|--------|
+| `patrol` | red pawn |
+| `suspicious` | amber pawn + `?` |
+| `alert` | orange pawn + `!` |
+| `searching` / cautious patrol | muted orange + `?` |
+
+Add only minimal shooter feedback:
+
+- Enemy bullets should be visually distinct from player bullets, likely red/orange.
+- Optional muzzle flash can wait.
+- Do not add UI text or tutorials.
 
 ---
 
-## File separation verdict
+## File Scope
 
-All changes go in `enemy.js`. A separate `enemyAI.js` would require 3-way dependencies (`enemy.js` + `game.js`) with no clean conceptual boundary. At ~580 lines post-F07 the file remains manageable.
+Expected files to modify during implementation:
+
+| File | Change |
+|------|--------|
+| `enemy.js` | Archetype fields, alert behavior helpers, enemy projectiles, shooter firing |
+| `game.js` | Possibly draw/update call sites if enemy projectile drawing needs placement |
+
+Keep the no-module script architecture. `enemy.js` still loads before `game.js`, so any `game.js` globals must only be referenced inside functions that run after both files load.

@@ -50,13 +50,13 @@ Toys/
 
 ### index.html / presentation
 
-The visible canvas is now fixed at 1920x1080 and CSS-scales to the monitor while preserving 16:9. The authored gameplay surface remains 1100x750 and is letterboxed inside the FHD canvas from `game.js`.
+The visible canvas is fixed at 1920x1080 and CSS-scales to the monitor while preserving 16:9. The internal gameplay world is also 1920x1080. Existing 1100x750 authored coordinates are scaled at load time via helper functions in `game.js` and `enemy.js`.
 
 ### game.js
 
 | System | Key identifiers |
 |--------|-----------------|
-| Fixed presentation | `GAME_WIDTH = 1100`, `GAME_HEIGHT = 750`, `GAME_SCALE`, `GAME_OFFSET_X/Y`, `gameCanvas`, `screenCtx`, `ctx` |
+| Fixed presentation | `DESIGN_WIDTH = 1100`, `DESIGN_HEIGHT = 750`, `GAME_WIDTH = 1920`, `GAME_HEIGHT = 1080`, `scaleGameX/Y/Unit()`, `gameCanvas`, `screenCtx`, `ctx` |
 | Walls | `WALLS`, `WALL_SEGMENTS`, `WALL_CORNERS`, `pushOutOfWalls(entity, radius)`, `hitsWall(x, y)` |
 | Player | `player`, `PLAYER_START`, `PLAYER_RADIUS`, `VISION_ANGLE` |
 | Mission | `pickup`, `exfilPoints`, `gapExits`, `gamePhase` |
@@ -75,6 +75,7 @@ Critical distinction: enemy detection must use `isLitByLamps()`, not `isLit()`. 
 | Sound | `emitSound()`, `notifyPlayerMoved()`, `applySoundReaction()` |
 | Reaction delay | `scheduleReaction()`, `reactionTimer`, `pendingReaction` |
 | Patrol | `patrolRoute`, `patrolIndex`, `patrolPauseTimer`, `patrolSweepAccum` |
+| FHD scaling | `ENEMY_DESIGN_WIDTH/HEIGHT`, `ENEMY_GAME_WIDTH/HEIGHT`, `scaleEnemyX/Y/Unit()` |
 | Reactive navigation | `NAV_NODES`, `NAV_EDGES`, `buildPath()`, `followNavPath()` |
 | Alert/search | `alertTimer`, `lastKnownX/Y`, `searchPath`, `searching`, `cautiousTimer` |
 | Rendering | `drawEnemies()`, `drawSoundEvents()`, `drawEnemyLabels()` |
@@ -85,7 +86,7 @@ Feature 07 is implemented in code: alert pursuit, alert timer refresh, last-know
 
 ## 4. Facility Layout
 
-Canvas gameplay coordinates remain 1100x750 even though the presentation canvas is 1920x1080.
+Canvas gameplay coordinates are now 1920x1080. The table below lists old authored coordinates from the design docs; code scales them to FHD at load time.
 
 | Passage | Center point | Connects |
 |---------|--------------|----------|
@@ -154,7 +155,7 @@ Note: the May 21 handoff warned that Enemy 1 and Enemy 2 were in a test layout. 
 - `enemy.js` loads before `game.js`; do not reference `game.js` globals at `enemy.js` module scope.
 - Angle convention: `angle = 0` means facing up. Direction vector is `(Math.sin(angle), -Math.cos(angle))`.
 - `pushOutOfWalls()` is called twice after pawn movement.
-- Keep gameplay coordinates in the 1100x750 authored space unless deliberately migrating the level.
-- Render gameplay to `gameCanvas`; only the final blit goes to the visible 1920x1080 canvas.
+- Keep new runtime gameplay coordinates in 1920x1080. When reusing old design-doc coordinates, scale them through the existing helper functions.
+- Render gameplay to a 1920x1080 `gameCanvas`; the final blit goes 1:1 to the visible 1920x1080 canvas before CSS scales it to the monitor.
 - One feature at a time. Write/update a design doc before non-trivial implementation.
 - Keep changes surgical and avoid speculative systems.
