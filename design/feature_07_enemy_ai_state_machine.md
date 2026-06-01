@@ -1,6 +1,6 @@
 # Feature 07 - Enemy AI State Machine
 
-**Status: REVISION PLANNED** - base patrol/suspicion/alert/search is implemented, but alert behavior now needs enemy archetypes.
+**Status: PARTIAL IMPLEMENTED** - base patrol/suspicion/alert/search is implemented. Melee and normal shooter archetypes are now implemented; precision shooter remains deferred.
 
 ---
 
@@ -45,7 +45,7 @@ The revision changes only what an enemy does while `state === 'alert'`.
 
 ### 1. Melee Weapon Enemy
 
-**Status:** implemented implicitly as current behavior.
+**Status:** implemented.
 
 Melee enemies are the existing guards:
 
@@ -74,7 +74,7 @@ if e.archetype === 'melee':
 
 ### 2. Normal Shooting Enemy
 
-**Status:** next implementation target.
+**Status:** implemented as the third enemy, the cross-room patrol.
 
 Normal shooters should not blindly overlap the player. They have a dedicated shooting range. When alerted:
 
@@ -208,6 +208,18 @@ Do not place precision enemies in the active level yet.
 
 ---
 
+## Current Level Assignment
+
+| Enemy | Location / patrol | Archetype |
+|-------|-------------------|-----------|
+| 1 | Lobby static sentry | `melee` |
+| 2 | Lobby short patrol | `melee` |
+| 3 | Room A / Corridor / Room BC patrol | `shooter` |
+
+The two lobby enemies keep the old chase-and-overlap behavior. The cross-room patrol holds shooting range and fires repeated spread shots when alerted.
+
+---
+
 ## Data Model Additions
 
 Add designer-set fields to `INITIAL_ENEMIES`:
@@ -266,14 +278,17 @@ Shared alert countdown remains outside these helpers:
 
 ---
 
-## Proposed First Implementation Scope
+## Implemented First Scope
 
-Implement only:
+Implemented:
 
 - Explicit `archetype: 'melee'` support.
 - Shooter archetype with range holding and repeated spread shots.
 - Enemy projectile array, update, draw, and wall collision.
-- Temporary player-hit handling, such as console log or visual flash.
+- Temporary player-hit handling via a red screen flash.
+
+Still deferred:
+
 - No precision enemy placement.
 - No player health/death system.
 - No retreat, cover, strafing, reload animation, or ammo economy.

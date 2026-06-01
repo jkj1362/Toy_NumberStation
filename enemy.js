@@ -15,9 +15,15 @@ function scaleEnemyConfig(e) {
     ...e,
     x: scaleEnemyX(e.x),
     y: scaleEnemyY(e.y),
+    archetype: e.archetype ?? 'melee',
     sightRange: e.sightRange === Infinity ? Infinity : scaleEnemyUnit(e.sightRange),
     proximityRadius: scaleEnemyUnit(e.proximityRadius),
     patrolSpeed: scaleEnemyUnit(e.patrolSpeed),
+    shootingRange: scaleEnemyUnit(e.shootingRange ?? 0),
+    shootingRangeTolerance: scaleEnemyUnit(e.shootingRangeTolerance ?? 0),
+    shotSpeed: scaleEnemyUnit(e.shotSpeed ?? 0),
+    shotCooldownFrames: e.shotCooldownFrames ?? 0,
+    aimSpreadRadians: e.aimSpreadRadians ?? 0,
     patrolRoute: e.patrolRoute.map(scaleEnemyPoint),
   };
 }
@@ -32,6 +38,9 @@ const WALK_SPEED        = scaleEnemyUnit(4);     // player.speed at normal walk;
 const SOUND_LIFETIME    = 30;    // frames for visual ring to fade
 const ARRIVAL_RADIUS    = scaleEnemyUnit(8);     // px ??enemy considered "at" a waypoint within this distance
 const ENEMY_RADIUS      = scaleEnemyUnit(16);    // px ??collision radius for pushOutOfWalls during patrol
+const ENEMY_PROJECTILE_HIT_RADIUS = scaleEnemyUnit(18);
+const ENEMY_PROJECTILE_SPAWN_OFFSET = scaleEnemyUnit(20);
+const PLAYER_HIT_FLASH_FRAMES = 18;
 
 const STANDARD_VISION = Math.PI * 2 / 3; // 120째 ??matches VISION_ANGLE in game.js
 
@@ -118,6 +127,7 @@ const INITIAL_ENEMIES = [
   // Enemy 1 ??static lobby sentry, faces north
   {
     x: 400, y: 590, angle: 0, targetAngle: 0,
+    archetype: 'melee',
     visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
     patrolSpeed: 1.5,
     patrolRoute: [],
@@ -125,6 +135,7 @@ const INITIAL_ENEMIES = [
   // Enemy 2 ??short center patrol nested inside Enemy 1's range
   {
     x: 500, y: 590, angle: 0, targetAngle: 0,
+    archetype: 'melee',
     visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
     patrolSpeed: 1.5,
     patrolRoute: [
@@ -135,8 +146,14 @@ const INITIAL_ENEMIES = [
   // Enemy 3 ??cross-room patrol Room A ??Corridor ??Room BC, 180째 sweep at each end
   {
     x: 200, y: 229, angle: 0, targetAngle: 0,
+    archetype: 'shooter',
     visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
     patrolSpeed: 1.5,
+    shootingRange: 360,
+    shootingRangeTolerance: 40,
+    shotCooldownFrames: 75,
+    shotSpeed: 25,
+    aimSpreadRadians: 0.16,
     patrolRoute: [
       { x: 200, y: 229, pauseFrames: 60, sweep: Math.PI, sweepSpeed: 0.008 }, // Room A ??sweep then head east
       { x: 409, y: 295, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room A gap
@@ -152,7 +169,9 @@ const INITIAL_ENEMIES = [
 
 let enemies      = [];
 let soundEvents  = [];
+let enemyProjectiles = [];
 let footstepTimer = 0;
+let playerHitFlashTimer = 0;
 
 function resetEnemies() {
   enemies = INITIAL_ENEMIES.map((e, i) => ({
@@ -181,9 +200,12 @@ function resetEnemies() {
     searchPathIndex:    0,
     searchSweepAccum:   0,    // accumulated rotation during search sweep
     cautiousTimer:      0,    // >0 = lingering vigilance after a reactive incident
+    shotTimer:          e.shotCooldownFrames,
   }));
   soundEvents.length = 0;
+  enemyProjectiles.length = 0;
   footstepTimer = 0;
+  playerHitFlashTimer = 0;
 }
 
 // Queue a delayed state change. Does nothing if already reacting (existing pending wins).
@@ -326,12 +348,114 @@ function enemyCanSeeCone(e) {
   return hasLOS(e.x, e.y, player.x, player.y);
 }
 
+function moveTowardPlayer(e, pdx, pdy, pd2) {
+  if (pd2 <= ARRIVAL_RADIUS * ARRIVAL_RADIUS) return;
+
+  if (hasLOS(e.x, e.y, player.x, player.y)) {
+    const pd = Math.sqrt(pd2);
+    e.x += (pdx / pd) * e.patrolSpeed;
+    e.y += (pdy / pd) * e.patrolSpeed;
+    e.targetAngle = Math.atan2(pdx, -pdy);
+    pushOutOfWalls(e, ENEMY_RADIUS);
+    pushOutOfWalls(e, ENEMY_RADIUS);
+  } else {
+    e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
+    e.searchPathIndex = 0;
+    followNavPath(e);
+  }
+}
+
+function fireEnemyShot(e) {
+  if (e.shotSpeed <= 0) return;
+
+  const baseAngle = Math.atan2(player.x - e.x, -(player.y - e.y));
+  const spread = (Math.random() * 2 - 1) * e.aimSpreadRadians;
+  const shotAngle = baseAngle + spread;
+  const dx = Math.sin(shotAngle);
+  const dy = -Math.cos(shotAngle);
+
+  enemyProjectiles.push({
+    x: e.x + dx * ENEMY_PROJECTILE_SPAWN_OFFSET,
+    y: e.y + dy * ENEMY_PROJECTILE_SPAWN_OFFSET,
+    vx: dx * e.shotSpeed,
+    vy: dy * e.shotSpeed,
+    angle: shotAngle,
+  });
+}
+
+function updateMeleeAlert(e) {
+  const pdx = player.x - e.x, pdy = player.y - e.y;
+  moveTowardPlayer(e, pdx, pdy, pdx * pdx + pdy * pdy);
+}
+
+function updateShooterAlert(e) {
+  const pdx = player.x - e.x, pdy = player.y - e.y;
+  const pd2 = pdx * pdx + pdy * pdy;
+  const dist = Math.sqrt(pd2);
+  const canShoot = hasLOS(e.x, e.y, player.x, player.y);
+
+  e.targetAngle = Math.atan2(pdx, -pdy);
+  if (e.shotTimer > 0) e.shotTimer--;
+
+  if (!canShoot) {
+    moveTowardPlayer(e, pdx, pdy, pd2);
+    return;
+  }
+
+  if (dist > e.shootingRange) {
+    moveTowardPlayer(e, pdx, pdy, pd2);
+    return;
+  }
+
+  if (e.shotTimer <= 0) {
+    fireEnemyShot(e);
+    e.shotTimer = e.shotCooldownFrames;
+  }
+}
+
+function updatePrecisionAlert(e) {
+  updateShooterAlert(e);
+}
+
+function updateAlertBehavior(e) {
+  if (e.archetype === 'shooter') {
+    updateShooterAlert(e);
+  } else if (e.archetype === 'precision') {
+    updatePrecisionAlert(e);
+  } else {
+    updateMeleeAlert(e);
+  }
+}
+
+function updateEnemyProjectiles() {
+  for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
+    const p = enemyProjectiles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+
+    const dx = p.x - player.x;
+    const dy = p.y - player.y;
+    const hitPlayer = dx * dx + dy * dy <= (PLAYER_RADIUS + ENEMY_PROJECTILE_HIT_RADIUS) ** 2;
+    const outOfBounds = p.x < 0 || p.x > ENEMY_GAME_WIDTH || p.y < 0 || p.y > ENEMY_GAME_HEIGHT;
+
+    if (hitPlayer) {
+      playerHitFlashTimer = PLAYER_HIT_FLASH_FRAMES;
+    }
+
+    if (hitPlayer || hitsWall(p.x, p.y) || outOfBounds) {
+      enemyProjectiles.splice(i, 1);
+    }
+  }
+}
+
 function updateEnemies() {
   // Tick sound event lifetimes
   for (let i = soundEvents.length - 1; i >= 0; i--) {
     soundEvents[i].life--;
     if (soundEvents[i].life <= 0) soundEvents.splice(i, 1);
   }
+  updateEnemyProjectiles();
+  if (playerHitFlashTimer > 0) playerHitFlashTimer--;
 
   for (const e of enemies) {
 
@@ -441,24 +565,7 @@ function updateEnemies() {
     // Step 2 has already pinned alertTimer to ALERT_FRAMES this frame if player is visible,
     // so the decrement below cannot expire while LOS holds.
     if (e.state === 'alert') {
-      const pdx = player.x - e.x, pdy = player.y - e.y;
-      const pd2 = pdx * pdx + pdy * pdy;
-      if (pd2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
-        if (hasLOS(e.x, e.y, player.x, player.y)) {
-          // Clear shot ??straight-line chase. Stable targetAngle, no nav-graph detour.
-          const pd = Math.sqrt(pd2);
-          e.x += (pdx / pd) * e.patrolSpeed;
-          e.y += (pdy / pd) * e.patrolSpeed;
-          e.targetAngle = Math.atan2(pdx, -pdy);
-          pushOutOfWalls(e, ENEMY_RADIUS);
-          pushOutOfWalls(e, ENEMY_RADIUS);
-        } else {
-          // LOS broken ??route around walls via nav graph, rebuilt each frame to track player.
-          e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
-          e.searchPathIndex = 0;
-          followNavPath(e);
-        }
-      }
+      updateAlertBehavior(e);
       e.alertTimer--;
       if (e.alertTimer <= 0) {
         if (e.lastKnownX !== null) {
@@ -552,6 +659,29 @@ function drawSoundEvents() {
     ctx.lineWidth   = scaleEnemyUnit(isGunshot ? 2 : 1);
     ctx.beginPath();
     ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (playerHitFlashTimer > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.22 * (playerHitFlashTimer / PLAYER_HIT_FLASH_FRAMES);
+    ctx.fillStyle = '#ff3333';
+    ctx.fillRect(0, 0, ENEMY_GAME_WIDTH, ENEMY_GAME_HEIGHT);
+    ctx.restore();
+  }
+}
+
+function drawEnemyProjectiles() {
+  ctx.strokeStyle = '#ff4a32';
+  ctx.lineWidth = scaleEnemyUnit(2);
+  for (const p of enemyProjectiles) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -scaleEnemyUnit(8));
+    ctx.lineTo(0, scaleEnemyUnit(8));
     ctx.stroke();
     ctx.restore();
   }
@@ -660,6 +790,8 @@ function drawEnemies() {
       ctx.restore();
     }
   }
+
+  drawEnemyProjectiles();
 }
 
 // Always-visible debug number labels ??drawn after fog in game.js so they show through darkness
