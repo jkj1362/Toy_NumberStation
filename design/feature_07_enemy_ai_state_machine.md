@@ -25,19 +25,43 @@ patrol
   -> suspicious
   -> alert
   -> searching
+  -> returning
   -> patrol with cautiousTimer
 ```
 
 Existing implemented behavior to keep:
 
-- Vision detection immediately enters `alert`.
-- Sound enters `suspicious`; a second stimulus confirms `alert`.
+- Patrol/search vision detection immediately enters `alert`.
+- Sound enters `suspicious`; a second stimulus schedules alert after `SUSPICION_CONFIRM_DELAY`.
+- Suspicious vision detection also schedules alert after `SUSPICION_CONFIRM_DELAY`.
 - `alertTimer` refreshes while the player is visible.
 - When alert expires with a last known player position, enemy enters `searching`.
-- `searching` navigates to `lastKnownX/Y`, performs a sweep, then returns to `patrol`.
+- `searching` navigates to `lastKnownX/Y`, performs a sweep, then enters `returning`.
+- `returning` navigates through the nav graph back to a patrol/home point before resuming patrol.
 - `cautiousTimer` makes recently reactive guards skip suspicion and snap to alert on sound.
 
 The revision changes only what an enemy does while `state === 'alert'`.
+
+Current timing:
+
+| Constant | Frames | Meaning |
+|----------|--------|---------|
+| `REACTION_DELAY` | 45 | Initial patrol reaction delay |
+| `SUSPICION_CONFIRM_DELAY` | 75 | Suspicious-to-alert confirmation delay |
+| `SUSPICION_TIMEOUT` | 300 | First turn-only suspicion timeout |
+| `ALERT_FRAMES` | 180 | Alert grace period after losing confirmation |
+
+### Reactive Navigation
+
+Reactive navigation uses `buildPath(fromX, fromY, toX, toY)` and `followNavPath(e)`.
+
+Current implementation detail:
+
+- `buildPath()` no longer picks the nearest nav node blindly.
+- Dynamic `start` and `goal` points connect to nav nodes only when the segment is clear for the enemy collision radius.
+- If the exact goal is not reachable, the path falls back to the closest reachable nav point instead of forcing a wall-colliding straight segment.
+- Alert chase uses straight movement only when `_pathSegmentClear()` says the segment is physically clear; otherwise it follows a nav path.
+- Search completion and sound-only alert expiry enter `returning`, then path back to the nearest patrol node or home position before patrol resumes.
 
 ---
 
@@ -50,8 +74,8 @@ The revision changes only what an enemy does while `state === 'alert'`.
 Melee enemies are the existing guards:
 
 - On detection, move directly toward the player.
-- If line of sight is clear, chase straight.
-- If line of sight is blocked, route through the nav graph.
+- If the straight movement segment is collision-clear, chase straight.
+- If the straight segment would collide with walls, route through the nav graph.
 - No combat resolution yet; overlapping the player is acceptable until damage/death is engineered.
 
 This should become explicit data:
@@ -106,7 +130,7 @@ FHD note: numeric distances in code should use the current scaling helpers, beca
 if e.archetype === 'shooter':
   face player
 
-  if no LOS:
+  if no collision-clear shot line:
     follow nav path toward player
     do not shoot
 
@@ -212,11 +236,11 @@ Do not place precision enemies in the active level yet.
 
 | Enemy | Location / patrol | Archetype |
 |-------|-------------------|-----------|
-| 1 | Lobby static sentry | `melee` |
+| 1 | Upper center room static sentry at (580, 100), faces south | `melee` |
 | 2 | Lobby short patrol | `melee` |
 | 3 | Room A / Corridor / Room BC patrol | `shooter` |
 
-The two lobby enemies keep the old chase-and-overlap behavior. The cross-room patrol holds shooting range and fires repeated spread shots when alerted.
+Enemy 1 was moved out of the lobby so it no longer contacts Enemy 2 or interferes with Enemy 3's cross-room patrol. Enemy 2 keeps the lobby chase-and-overlap behavior. Enemy 3 holds shooting range and fires repeated spread shots when alerted.
 
 ---
 
@@ -240,8 +264,14 @@ Add runtime fields in `resetEnemies()`:
 ```javascript
 {
   shotTimer: 0,
+  returnTargetX: e.x,
+  returnTargetY: e.y,
+  returnTargetAngle: e.targetAngle,
+  returnPatrolIndex: 0,
 }
 ```
+
+`returnTarget*` fields are used by the `returning` state after failed searches or sound-only alerts. Patrol enemies return to the nearest patrol node; static enemies return to their home position and facing.
 
 Default rules:
 
@@ -273,7 +303,9 @@ Shared alert countdown remains outside these helpers:
 1. Detect/refresh alert and lastKnown.
 2. Run archetype-specific alert behavior.
 3. Decrement alertTimer only if player is not currently visible.
-4. Expire into searching/patrol as current implementation does.
+4. If lastKnown exists, expire into searching.
+5. If alert was sound-only, expire into returning.
+6. After searching, enter returning before normal patrol resumes.
 ```
 
 ---
@@ -286,6 +318,10 @@ Implemented:
 - Shooter archetype with range holding and repeated spread shots.
 - Enemy projectile array, update, draw, and wall collision.
 - Temporary player-hit handling via a red screen flash.
+- Suspicious confirmation delay before suspicious enemies become alert.
+- Wall-aware dynamic paths for suspicion movement, chase fallback, searching, and returning.
+- `returning` state so enemies resume patrol/home behavior from valid positions.
+- Enemy 1 moved to the upper center room to avoid Enemy 2 contact and Enemy 3 patrol interference.
 
 Still deferred:
 
@@ -304,7 +340,7 @@ Current enemy state colors remain:
 | `patrol` | red pawn |
 | `suspicious` | amber pawn + `?` |
 | `alert` | orange pawn + `!` |
-| `searching` / cautious patrol | muted orange + `?` |
+| `searching` / `returning` / cautious patrol | muted orange + `?` |
 
 Add only minimal shooter feedback:
 

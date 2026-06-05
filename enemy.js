@@ -32,6 +32,7 @@ const ENEMY_HIT_RADIUS  = scaleEnemyUnit(20);
 const ALERT_FRAMES      = 180;   // 3 s at 60 fps
 const SUSPICION_TIMEOUT = 300;   //  5 s at 60 fps ??no-input timeout for level-1 suspicion
 const REACTION_DELAY    = 45;    // 0.75 s ??window of opportunity before enemy reacts
+const SUSPICION_CONFIRM_DELAY = 75; // 1.25 s ??suspicious stimulus must settle before alert
 const GUNSHOT_RADIUS    = scaleEnemyUnit(350);
 const FOOTSTEP_RADIUS   = scaleEnemyUnit(120);   // max footstep reach at walk speed
 const WALK_SPEED        = scaleEnemyUnit(4);     // player.speed at normal walk; used for footstep scaling
@@ -74,46 +75,88 @@ const NAV_EDGES = [
   ['gap_room_bc',    'room_bc'],
 ];
 
-const NAV_ADJ = (() => {
-  const a = {};
-  for (const id in NAV_NODES) a[id] = [];
-  for (const [u, v] of NAV_EDGES) { a[u].push(v); a[v].push(u); }
-  return a;
-})();
-
-function _nearestNavNode(x, y) {
-  let best = null, bestD2 = Infinity;
-  for (const id in NAV_NODES) {
-    const n = NAV_NODES[id];
-    const d2 = (n.x - x) ** 2 + (n.y - y) ** 2;
-    if (d2 < bestD2) { bestD2 = d2; best = id; }
+function _pointHitsExpandedWall(x, y, radius = ENEMY_RADIUS) {
+  for (const wall of WALLS) {
+    if (x > wall.x - radius && x < wall.x + wall.w + radius &&
+        y > wall.y - radius && y < wall.y + wall.h + radius) {
+      return true;
+    }
   }
-  return best;
+  return false;
 }
 
-// Ordered [{x,y}] waypoints: nav nodes start?뭙nd then final (toX,toY).
-// Same start/end node ??straight-line to destination (skip graph).
+function _pathSegmentClear(x1, y1, x2, y2, radius = ENEMY_RADIUS) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const steps = Math.max(1, Math.ceil(dist / Math.max(1, radius * 0.5)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    if (_pointHitsExpandedWall(x1 + dx * t, y1 + dy * t, radius)) return false;
+  }
+  return true;
+}
+
+// Ordered [{x,y}] waypoints through the nav graph. Start and goal are connected
+// only to nodes they can actually reach without crossing expanded wall collision.
 function buildPath(fromX, fromY, toX, toY) {
-  const s = _nearestNavNode(fromX, fromY);
-  const t = _nearestNavNode(toX,   toY);
-  if (s === t) return [{ x: toX, y: toY }];
-  const prev = { [s]: null };
-  const q = [s];
+  const nodes = {
+    start: { x: fromX, y: fromY },
+    goal:  { x: toX, y: toY },
+    ...NAV_NODES,
+  };
+  const adj = {};
+  for (const id in nodes) adj[id] = [];
+  for (const [u, v] of NAV_EDGES) {
+    adj[u].push(v);
+    adj[v].push(u);
+  }
+
+  const connectDynamic = (a, b) => {
+    if (_pathSegmentClear(nodes[a].x, nodes[a].y, nodes[b].x, nodes[b].y)) {
+      adj[a].push(b);
+      adj[b].push(a);
+    }
+  };
+
+  connectDynamic('start', 'goal');
+  for (const id in NAV_NODES) {
+    connectDynamic('start', id);
+    connectDynamic('goal', id);
+  }
+
+  const prev = { start: null };
+  const q = ['start'];
   let found = false;
   while (q.length) {
     const cur = q.shift();
-    if (cur === t) { found = true; break; }
-    for (const nb of NAV_ADJ[cur]) {
+    if (cur === 'goal') { found = true; break; }
+    for (const nb of adj[cur]) {
       if (nb in prev) continue;
       prev[nb] = cur;
       q.push(nb);
     }
   }
-  if (!found) return [{ x: toX, y: toY }];
+  if (!found) {
+    let best = null;
+    let bestD2 = Infinity;
+    for (const id in prev) {
+      if (id === 'start') continue;
+      const d2 = (nodes[id].x - toX) ** 2 + (nodes[id].y - toY) ** 2;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = id;
+      }
+    }
+    if (best === null) return [{ x: toX, y: toY }];
+    const fallbackIds = [];
+    for (let c = best; c !== 'start'; c = prev[c]) fallbackIds.unshift(c);
+    return fallbackIds.map(id => ({ x: nodes[id].x, y: nodes[id].y }));
+  }
+
   const ids = [];
-  for (let c = t; c !== null; c = prev[c]) ids.unshift(c);
-  return ids.map(id => ({ x: NAV_NODES[id].x, y: NAV_NODES[id].y }))
-            .concat([{ x: toX, y: toY }]);
+  for (let c = 'goal'; c !== 'start'; c = prev[c]) ids.unshift(c);
+  return ids.map(id => ({ x: nodes[id].x, y: nodes[id].y }));
 }
 
 // Patrol node: { x, y, pauseFrames, sweep (radians), sweepSpeed (rad/frame, +CW/-CCW) }
@@ -124,9 +167,9 @@ function buildPath(fromX, fromY, toX, toY) {
 //   patrolRoute:     array of patrol nodes; [] = static
 //   patrolSpeed:     px/frame during translation
 const INITIAL_ENEMIES = [
-  // Enemy 1 ??static lobby sentry, faces north
+  // Enemy 1 ??static upper-room sentry, offset from Enemy 3's cross-room patrol
   {
-    x: 400, y: 590, angle: 0, targetAngle: 0,
+    x: 580, y: 100, angle: Math.PI, targetAngle: Math.PI,
     archetype: 'melee',
     visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
     patrolSpeed: 1.5,
@@ -199,6 +242,10 @@ function resetEnemies() {
     searchPath:         [],   // nav waypoints to lastKnown position
     searchPathIndex:    0,
     searchSweepAccum:   0,    // accumulated rotation during search sweep
+    returnTargetX:      e.x,  // patrol/home position selected after reactive search
+    returnTargetY:      e.y,
+    returnTargetAngle:  e.targetAngle,
+    returnPatrolIndex:  0,
     cautiousTimer:      0,    // >0 = lingering vigilance after a reactive incident
     shotTimer:          e.shotCooldownFrames,
   }));
@@ -209,9 +256,9 @@ function resetEnemies() {
 }
 
 // Queue a delayed state change. Does nothing if already reacting (existing pending wins).
-function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y) {
+function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = REACTION_DELAY) {
   if (e.reactionTimer > 0) return;
-  e.reactionTimer   = REACTION_DELAY;
+  e.reactionTimer   = delayFrames;
   e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY };
 }
 
@@ -222,13 +269,10 @@ function applySoundReaction(e, sourceX, sourceY) {
   if (e.state === 'patrol') {
     scheduleReaction(e, 'suspicious', angle, sourceX, sourceY);
   } else if (e.state === 'suspicious') {
-    // Second sound while suspicious ??confirmed alert (immediate, no delay)
-    e.reactionTimer   = 0;
-    e.pendingReaction = null;
-    e.state      = 'alert';
-    e.alertTimer = ALERT_FRAMES;
+    // Second sound while suspicious ??confirmed alert after a short lock-on delay.
     e.targetAngle = angle;
-  } else if (e.state === 'searching' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
+    scheduleReaction(e, 'alert', angle, sourceX, sourceY, SUSPICION_CONFIRM_DELAY);
+  } else if (e.state === 'searching' || e.state === 'returning' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
     // Already on edge ??any sound snaps straight to alert, skipping suspicion delay
     e.reactionTimer   = 0;
     e.pendingReaction = null;
@@ -337,6 +381,57 @@ function followNavPath(e) {
   return e.searchPathIndex >= e.searchPath.length;
 }
 
+function beginReturnToPatrol(e) {
+  let targetX = e.returnTargetX;
+  let targetY = e.returnTargetY;
+  let targetAngle = e.returnTargetAngle;
+  let targetPatrolIndex = e.patrolIndex;
+
+  if (e.patrolRoute.length > 0) {
+    let bestIndex = 0;
+    let bestD2 = Infinity;
+    for (let i = 0; i < e.patrolRoute.length; i++) {
+      const node = e.patrolRoute[i];
+      const d2 = (node.x - e.x) ** 2 + (node.y - e.y) ** 2;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        bestIndex = i;
+      }
+    }
+
+    const node = e.patrolRoute[bestIndex];
+    targetX = node.x;
+    targetY = node.y;
+    targetPatrolIndex = bestIndex;
+
+    if (node.sweep === 0) {
+      const next = e.patrolRoute[(bestIndex + 1) % e.patrolRoute.length];
+      targetAngle = Math.atan2(next.x - node.x, -(next.y - node.y));
+    }
+  }
+
+  e.returnTargetX = targetX;
+  e.returnTargetY = targetY;
+  e.returnTargetAngle = targetAngle;
+  e.returnPatrolIndex = targetPatrolIndex;
+  e.searchPath = buildPath(e.x, e.y, targetX, targetY);
+  e.searchPathIndex = 0;
+  e.state = 'returning';
+}
+
+function finishReturnToPatrol(e) {
+  e.x = e.returnTargetX;
+  e.y = e.returnTargetY;
+  e.state = 'patrol';
+  e.targetAngle = e.returnTargetAngle;
+  e.patrolIndex = e.returnPatrolIndex;
+  e.patrolPauseTimer = 0;
+  e.patrolSweepAccum = 0;
+  e.reactionTimer = 0;
+  e.pendingReaction = null;
+  e.cautiousTimer = CAUTIOUS_FRAMES;
+}
+
 // Vision cone detection only ??no proximity bubble.
 // Proximity is handled separately with a reaction delay.
 function enemyCanSeeCone(e) {
@@ -351,18 +446,25 @@ function enemyCanSeeCone(e) {
 function moveTowardPlayer(e, pdx, pdy, pd2) {
   if (pd2 <= ARRIVAL_RADIUS * ARRIVAL_RADIUS) return;
 
-  if (hasLOS(e.x, e.y, player.x, player.y)) {
+  if (_pathSegmentClear(e.x, e.y, player.x, player.y)) {
     const pd = Math.sqrt(pd2);
+    const prevX = e.x, prevY = e.y;
     e.x += (pdx / pd) * e.patrolSpeed;
     e.y += (pdy / pd) * e.patrolSpeed;
     e.targetAngle = Math.atan2(pdx, -pdy);
     pushOutOfWalls(e, ENEMY_RADIUS);
     pushOutOfWalls(e, ENEMY_RADIUS);
-  } else {
-    e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
-    e.searchPathIndex = 0;
-    followNavPath(e);
+    if (Math.abs(e.x - prevX) + Math.abs(e.y - prevY) >= 0.1) return;
   }
+
+  e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
+  e.searchPathIndex = 0;
+  followNavPath(e);
+}
+
+function canShootPlayer(e) {
+  if (!hasLOS(e.x, e.y, player.x, player.y)) return false;
+  return _pathSegmentClear(e.x, e.y, player.x, player.y, ENEMY_PROJECTILE_HIT_RADIUS);
 }
 
 function fireEnemyShot(e) {
@@ -392,7 +494,7 @@ function updateShooterAlert(e) {
   const pdx = player.x - e.x, pdy = player.y - e.y;
   const pd2 = pdx * pdx + pdy * pdy;
   const dist = Math.sqrt(pd2);
-  const canShoot = hasLOS(e.x, e.y, player.x, player.y);
+  const canShoot = canShootPlayer(e);
 
   e.targetAngle = Math.atan2(pdx, -pdy);
   if (e.shotTimer > 0) e.shotTimer--;
@@ -473,7 +575,6 @@ function updateEnemies() {
           e.suspicionSourceX = e.pendingReaction.sourceX;
           e.suspicionSourceY = e.pendingReaction.sourceY;
           if (e.suspicionLevel >= 2) {
-            // Second+ suspicion: nav-path to source and investigate
             e.suspicionPhase      = 'moving';
             e.suspicionReturnX    = e.x;
             e.suspicionReturnY    = e.y;
@@ -481,7 +582,6 @@ function updateEnemies() {
             e.searchPath          = buildPath(e.x, e.y, e.suspicionSourceX, e.suspicionSourceY);
             e.searchPathIndex     = 0;
           } else {
-            // First suspicion: turn toward source and wait
             e.suspicionPhase = 'turning';
           }
         }
@@ -490,16 +590,22 @@ function updateEnemies() {
       }
     }
 
-    // 2. Immediate: vision cone detection ??always overrides any pending reaction.
-    // alertTimer refreshes every visible frame so enemy stays alert while it can see player.
+    // 2. Vision cone detection.
+    // Patrol/search detection is immediate; suspicious detection must confirm briefly.
     if (enemyCanSeeCone(e)) {
-      e.reactionTimer   = 0;
-      e.pendingReaction = null;
-      e.state      = 'alert';
-      e.alertTimer = ALERT_FRAMES;
-      e.targetAngle = Math.atan2(player.x - e.x, -(player.y - e.y));
+      const angle = Math.atan2(player.x - e.x, -(player.y - e.y));
+      e.targetAngle = angle;
       e.lastKnownX = player.x;
       e.lastKnownY = player.y;
+
+      if (e.state === 'suspicious') {
+        scheduleReaction(e, 'alert', angle, player.x, player.y, SUSPICION_CONFIRM_DELAY);
+      } else {
+        e.reactionTimer   = 0;
+        e.pendingReaction = null;
+        e.state      = 'alert';
+        e.alertTimer = ALERT_FRAMES;
+      }
     }
     // 3. Delayed: proximity detection ??only when not already reacting or alert
     else if (e.reactionTimer === 0 && e.state !== 'alert') {
@@ -510,12 +616,11 @@ function updateEnemies() {
       }
     }
 
-    // 4. Suspicious state ??two-level behavior
+    // 4. Suspicious state ??first suspicion turns in place; later suspicions move/search/return.
     if (e.state === 'suspicious') {
       e.suspicionTimer++;
 
       if (e.suspicionPhase === 'turning') {
-        // Level 1: turn toward source in place, timeout ??patrol
         if (e.suspicionTimer >= SUSPICION_TIMEOUT) {
           e.state = 'patrol';
           e.targetAngle = e.suspicionOriginalAngle; // restore original facing
@@ -525,7 +630,7 @@ function updateEnemies() {
         }
 
       } else if (e.suspicionPhase === 'moving') {
-        // Level 2+: nav-path to source of suspicion
+        // Move through the nav graph to the source of suspicion.
         if (followNavPath(e)) {
           e.suspicionPhase     = 'searching';
           e.suspicionSearchAccum = 0;
@@ -574,9 +679,8 @@ function updateEnemies() {
           e.searchPathIndex  = 0;
           e.searchSweepAccum = 0;
         } else {
-          // Sound-only alert (never confirmed a sight) ??resume patrol.
-          e.state = 'patrol';
-          e.cautiousTimer = CAUTIOUS_FRAMES;
+          // Sound-only alert (never confirmed a sight) ??path home before resuming.
+          beginReturnToPatrol(e);
         }
       }
     }
@@ -587,11 +691,17 @@ function updateEnemies() {
       if (followNavPath(e)) {
         e.targetAngle      += SEARCH_SWEEP_RATE;
         e.searchSweepAccum += SEARCH_SWEEP_RATE;
-        // Sweep done with no re-acquisition ??resume patrol, lingering vigilance armed.
+        // Sweep done with no re-acquisition ??path back to patrol/home before resuming.
         if (e.searchSweepAccum >= Math.PI * 1.5) {
-          e.state = 'patrol';
-          e.cautiousTimer = CAUTIOUS_FRAMES;
+          beginReturnToPatrol(e);
         }
+      }
+    }
+
+    // 5c. Returning ??reactive searches use nav paths back to the normal patrol/home spot.
+    if (e.state === 'returning') {
+      if (followNavPath(e)) {
+        finishReturnToPatrol(e);
       }
     }
 
@@ -723,12 +833,15 @@ function drawEnemies() {
   for (const e of enemies) {
     const isAlert     = e.state === 'alert';
     const isSuspicious = e.state === 'suspicious';
-    const isCautious  = e.state === 'searching' || (e.state === 'patrol' && e.cautiousTimer > 0);
+    const isCautious  = e.state === 'searching' || e.state === 'returning' || (e.state === 'patrol' && e.cautiousTimer > 0);
     const isReacting  = e.reactionTimer > 0;
 
     // Reaction delay ring ??contracting white circle shows the opportunity window
     if (isReacting) {
-      const progress = e.reactionTimer / REACTION_DELAY; // 1 ??0 as timer counts down
+      const reactionDelay = e.state === 'suspicious' && e.pendingReaction?.state === 'alert'
+        ? SUSPICION_CONFIRM_DELAY
+        : REACTION_DELAY;
+      const progress = e.reactionTimer / reactionDelay; // 1 ??0 as timer counts down
       const ringR    = e.proximityRadius * progress;
       ctx.save();
       ctx.globalAlpha = 0.7 * progress;

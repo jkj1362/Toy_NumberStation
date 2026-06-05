@@ -44,7 +44,8 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | 6 | **Enemy Movement & Patrol** | Done. Waypoint patrol routes, including cross-room patrol |
 | 7 | **Enemy AI State Machine** | Done. Alert pursuit, last-known search, and lingering cautious behavior |
 | 8 | **Walk vs. Run + Noise Tradeoff** | Next. Shift/run speed and louder movement |
-| 9 | **Metagame & Daytime Systems** | Conceptual. Deferred until night-phase prototype is validated |
+| 9 | **Follow Camera & Hard-Aim Scouting** | Player-centered camera; LT hard-aim look-ahead. Depends on Feature 8 (walk-slow) |
+| ## | **Metagame & Daytime Systems** | Conceptual. Deferred until night-phase prototype is validated |
 
 ## Key Design Decisions
 

@@ -60,6 +60,17 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+### Visual Screenshot Check
+
+When checking current progress or implementing work that affects the codebase, game behavior, mathematics, geometry, rendering, UI, or any player-facing visual system, verify the work visually instead of relying only on code inspection.
+
+- Open or run the game when practical.
+- Take a screenshot of the current game screen.
+- Use the screenshot to decide how to proceed and to QA the result.
+- Treat screenshot verification as part of the normal development loop for visualization work.
+
+This is especially important for upcoming visualization development and QA, where correctness depends on what is actually visible on screen.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
