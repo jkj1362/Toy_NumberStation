@@ -53,33 +53,7 @@ const WALLS = [
   { x:  900, y: 640, w:  18, h:  92 },
 ].map(scaleGameRect);
 
-const PLAYER_START = scaleGamePoint({ x: 500, y: 680 });
-
-// Player movement tuning. These design-space values are intentionally centralized
-// so sneak/walk/sprint feel and noise can be adjusted without touching input logic.
-const PLAYER_SNEAK_SPEED = scaleGameUnit(0.8);
-const PLAYER_WALK_SPEED = scaleGameUnit(2.25);
-const PLAYER_SPRINT_SPEED = scaleGameUnit(4);
-const PLAYER_SNEAK_NOISE_SCALE = 0.45;
-const PLAYER_WALK_NOISE_SCALE = 1;
-const PLAYER_SPRINT_NOISE_SCALE = 1.6;
-const WALK_MODE_STICK_THRESHOLD = 0.85;
-
-// x, y = center of character; angle = 0 means facing up
-const player = {
-  x: PLAYER_START.x,
-  y: PLAYER_START.y,
-  speed: PLAYER_WALK_SPEED,
-  noiseScale: PLAYER_WALK_NOISE_SCALE,
-  movementMode: 'walk',
-  sprintActive: false,
-  angle: 0,
-  targetAngle: 0,
-};
-const keys = {};
 const projectiles = [];
-let rtWasPressed = false;
-let sprintWasPressed = false;
 
 
 const LAMP_HIT_RADIUS = scaleGameUnit(10);
@@ -113,13 +87,8 @@ const WALL_GAP_EXITS = [
 ].map(scaleGamePoint);
 let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
-const PLAYER_RADIUS = scaleGameUnit(28); // outermost extent of the character shape
-const VISION_ANGLE = Math.PI * 2 / 3; // 120° total field of view (tune between PI/2 and 5PI/6 for 90°–150°)
-
 const INTERACT_RADIUS = scaleGameUnit(30);
 const EXFIL_RADIUS    = scaleGameUnit(40);
-const PLAYER_GLOW_RADIUS = scaleGameUnit(80);
-const PLAYER_PROXIMITY_RADIUS = scaleGameUnit(50);
 const LAMP_OFFSETS = {
   N: [0, scaleGameY(8)],
   S: [0, -scaleGameY(8)],
@@ -255,14 +224,7 @@ function hitsWall(x, y) {
 }
 
 function reset() {
-  player.x = PLAYER_START.x;
-  player.y = PLAYER_START.y;
-  player.speed = PLAYER_WALK_SPEED;
-  player.noiseScale = PLAYER_WALK_NOISE_SCALE;
-  player.movementMode = 'walk';
-  player.sprintActive = false;
-  player.angle = 0;
-  player.targetAngle = 0;
+  resetPlayer();
   projectiles.length = 0;
   resetEnemies();
   for (const lamp of LAMPS) lamp.active = true;
@@ -275,118 +237,9 @@ function reset() {
 let bWasPressed = false;
 let eWasPressed = false;
 
-window.addEventListener('keydown', e => keys[e.key] = true);
-window.addEventListener('keyup', e => keys[e.key] = false);
-
-const DEADZONE = 0.15;
-
-function lerpAngle(current, target, t) {
-  let diff = target - current;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return current + diff * t;
-}
-
-function readStick(gp, axisX, axisY) {
-  if (!gp) return { x: 0, y: 0 };
-  const x = Math.abs(gp.axes[axisX]) > DEADZONE ? gp.axes[axisX] : 0;
-  const y = Math.abs(gp.axes[axisY]) > DEADZONE ? gp.axes[axisY] : 0;
-  return { x, y };
-}
-
-function readMoveStick(gp) {
-  if (!gp) return { x: 0, y: 0, amount: 0 };
-  const rawX = gp.axes[0] ?? 0;
-  const rawY = gp.axes[1] ?? 0;
-  const magnitude = Math.min(1, Math.hypot(rawX, rawY));
-  if (magnitude <= DEADZONE) return { x: 0, y: 0, amount: 0 };
-  return {
-    x: rawX / magnitude,
-    y: rawY / magnitude,
-    amount: (magnitude - DEADZONE) / (1 - DEADZONE),
-  };
-}
-
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
 function update() {
   const gp = navigator.getGamepads?.()[0] ?? null;
-
-  const prevX = player.x, prevY = player.y;
-
-  // Face button A toggles sprint. Sprint is intentionally gamepad-only for this pass.
-  const sprintPressed = gp?.buttons[0]?.pressed ?? false;
-  if (sprintPressed && !sprintWasPressed) player.sprintActive = !player.sprintActive;
-  sprintWasPressed = sprintPressed;
-
-  player.speed = PLAYER_WALK_SPEED;
-  player.noiseScale = PLAYER_WALK_NOISE_SCALE;
-  player.movementMode = 'walk';
-
-  // WASD remains a simple walking fallback.
-  let keyboardX = 0, keyboardY = 0;
-  if (keys['a']) keyboardX -= 1;
-  if (keys['d']) keyboardX += 1;
-  if (keys['w']) keyboardY -= 1;
-  if (keys['s']) keyboardY += 1;
-  const keyboardMagnitude = Math.hypot(keyboardX, keyboardY);
-  if (keyboardMagnitude > 0) {
-    player.x += (keyboardX / keyboardMagnitude) * PLAYER_WALK_SPEED;
-    player.y += (keyboardY / keyboardMagnitude) * PLAYER_WALK_SPEED;
-  }
-
-  // L-stick controls sneak-to-walk analog movement. Stick tilt alone cannot sprint.
-  const left = readMoveStick(gp);
-  if (left.amount > 0) {
-    if (player.sprintActive) {
-      player.speed = PLAYER_SPRINT_SPEED;
-      player.noiseScale = PLAYER_SPRINT_NOISE_SCALE;
-      player.movementMode = 'sprint';
-    } else {
-      player.speed = lerp(PLAYER_SNEAK_SPEED, PLAYER_WALK_SPEED, left.amount);
-      player.noiseScale = lerp(PLAYER_SNEAK_NOISE_SCALE, PLAYER_WALK_NOISE_SCALE, left.amount);
-      player.movementMode = left.amount >= WALK_MODE_STICK_THRESHOLD ? 'walk' : 'sneak';
-    }
-
-    player.x += left.x * player.speed;
-    player.y += left.y * player.speed;
-  } else if (player.sprintActive) {
-    player.sprintActive = false;
-  }
-
-  // Wall collision (run twice to resolve corner cases)
-  pushOutOfWalls(player, PLAYER_RADIUS);
-  pushOutOfWalls(player, PLAYER_RADIUS);
-  // Canvas bounds fallback
-  player.x = Math.max(PLAYER_RADIUS, Math.min(GAME_WIDTH  - PLAYER_RADIUS, player.x));
-  player.y = Math.max(PLAYER_RADIUS, Math.min(GAME_HEIGHT - PLAYER_RADIUS, player.y));
-
-  if (player.x !== prevX || player.y !== prevY) notifyPlayerMoved();
-
-  // R-stick rotation (axes 2, 3) — updates target, angle lerps toward it
-  const right = readStick(gp, 2, 3);
-  if (right.x !== 0 || right.y !== 0) {
-    player.targetAngle = Math.atan2(right.x, -right.y);
-  }
-  player.angle = lerpAngle(player.angle, player.targetAngle, 0.18);
-
-  // RT (button 7) — fire projectile on press (not hold)
-  const rtPressed = gp?.buttons[7]?.pressed ?? false;
-  if (rtPressed && !rtWasPressed) {
-    const dx = Math.sin(player.angle);
-    const dy = -Math.cos(player.angle);
-    projectiles.push({
-      x: player.x + dx * scaleGameUnit(20),
-      y: player.y + dy * scaleGameUnit(20),
-      vx: dx * scaleGameUnit(25),
-      vy: dy * scaleGameUnit(25),
-      angle: player.angle,
-    });
-    emitSound(player.x, player.y, GUNSHOT_RADIUS, true);
-  }
-  rtWasPressed = rtPressed;
+  updatePlayer(gp, projectiles);
 
   // B button (button 1) — reset
   const bPressed = gp?.buttons[1]?.pressed ?? false;
@@ -496,41 +349,6 @@ function drawMapGeometry() {
   }
   ctx.restore();
 }
-
-function drawPlayer() {
-  ctx.save();
-  ctx.translate(player.x, player.y);
-  ctx.rotate(player.angle);
-  ctx.scale(scaleGameUnit(1), scaleGameUnit(1));
-
-  // Shoulders (slightly behind center in local space, +y = back)
-  ctx.fillStyle = '#3a8fd4';
-  ctx.beginPath();
-  ctx.arc(-18, 0, 10, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(18, 0, 10, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Head (big circle)
-  ctx.fillStyle = '#5ab0f5';
-  ctx.beginPath();
-  ctx.arc(0, 0, 16, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Front direction arrow (triangle, pointing up = forward in local space)
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.moveTo(0, -28);   // tip
-  ctx.lineTo(-7, -18);  // base left
-  ctx.lineTo(7, -18);   // base right
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.restore();
-}
-
 
 function drawProjectiles() {
   ctx.strokeStyle = '#ffe066';

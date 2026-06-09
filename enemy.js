@@ -43,7 +43,7 @@ const ENEMY_PROJECTILE_HIT_RADIUS = scaleEnemyUnit(18);
 const ENEMY_PROJECTILE_SPAWN_OFFSET = scaleEnemyUnit(20);
 const PLAYER_HIT_FLASH_FRAMES = 18;
 
-const STANDARD_VISION = Math.PI * 2 / 3; // 120째 ??matches VISION_ANGLE in game.js
+const STANDARD_VISION = Math.PI * 2 / 3; // 120 deg, matches VISION_ANGLE in player.js
 
 const SEARCH_SWEEP_RATE = 0.016; // 270째 over ~5 s at 60 fps
 const CAUTIOUS_FRAMES   = 1800;  // 30 s ??lingering vigilance after returning to patrol

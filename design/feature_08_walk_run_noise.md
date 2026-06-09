@@ -40,7 +40,7 @@ Keyboard controls are not part of this feature pass. Existing WASD movement may 
 
 Exact values should be tuned in implementation. Sprint should reuse the current movement speed because the current speed feels appropriate for sprinting. Walking should be slowed down so it becomes the normal cautious traversal pace.
 
-Runtime tuning values should stay centralized in `game.js` so speed and noise can be adjusted without changing input logic:
+Runtime tuning values should stay centralized in `player.js` so speed and noise can be adjusted without changing input logic:
 
 | Constant | Purpose |
 |----------|---------|
