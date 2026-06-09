@@ -284,19 +284,23 @@ function applySoundReaction(e, sourceX, sourceY) {
   }
 }
 
-// Footstep sound ??per-enemy radius based on player speed.
+// Footstep sound ??per-enemy radius based on the player's current noise scale.
 // Called by game.js each frame the player actually moved.
 function notifyPlayerMoved() {
   footstepTimer++;
   if (footstepTimer < 30) return;
   footstepTimer = 0;
 
-  // Visual ring uses the standard walk radius
-  soundEvents.push({ x: player.x, y: player.y, radius: FOOTSTEP_RADIUS, life: SOUND_LIFETIME });
+  const noiseScale = typeof player.noiseScale === 'number'
+    ? player.noiseScale
+    : player.speed / WALK_SPEED;
+
+  // Visual ring uses the same effective scale as hearing so the tradeoff is readable.
+  soundEvents.push({ x: player.x, y: player.y, radius: FOOTSTEP_RADIUS * noiseScale, life: SOUND_LIFETIME });
 
   for (const e of enemies) {
-    // Per-enemy footstep radius: collapses to proximityRadius at speed 0, scales up with speed
-    const footRadius = e.proximityRadius + (player.speed / WALK_SPEED) * (FOOTSTEP_RADIUS - e.proximityRadius);
+    // Per-enemy footstep radius: walk reaches FOOTSTEP_RADIUS, sneak is quieter, sprint is louder.
+    const footRadius = e.proximityRadius + noiseScale * (FOOTSTEP_RADIUS - e.proximityRadius);
     const dx = e.x - player.x, dy = e.y - player.y;
     if (dx * dx + dy * dy > footRadius * footRadius) continue;
     applySoundReaction(e, player.x, player.y);
