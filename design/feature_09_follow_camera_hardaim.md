@@ -1,6 +1,6 @@
 # Feature 09 — Follow Camera & Hard-Aim Scouting
 
-**Status: PENDING**
+**Status: DONE**
 
 ---
 
@@ -15,9 +15,9 @@ The camera has two states: a calm **Look** state (dead-zone, player roughly cent
 **Hard-Aim** scouting state (hold Left Trigger) that pushes the camera forward so the player
 can see much farther ahead at the cost of awareness behind them.
 
-> Note: the payoff scales with map size. On the current 1920×1080 map (barely larger than the
-> viewport) the camera mostly clamps at map edges. Keep zoom at 1:1; the effect grows as the
-> map expands (many rooms / multiple floors).
+> Note: the payoff scales with map size. The current test world is larger than the viewport
+> so the camera can move, but the same 1:1 zoom should remain as the facility expands into
+> many rooms / multiple floors.
 
 ---
 
@@ -75,7 +75,7 @@ Keyboard/mouse equivalents to be decided during implementation (e.g. hold a key 
 
 ---
 
-## Implementation Notes
+## Implementation Summary
 
 - Track `cameraX/cameraY`, eased each frame toward a target:
   `target = playerPos + lookaheadOffset`, where `lookaheadOffset` ramps to
@@ -86,10 +86,10 @@ Keyboard/mouse equivalents to be decided during implementation (e.g. hold a key 
   elements; restore before drawing HUD/UI (screen space).
 - **Keep all collision and raycasting in world space** — do not transform `WALLS` /
   `WALL_SEGMENTS` or the vision/LOS math. Only the draw transform changes.
-- **Fixed-canvas caveat:** fog/lighting/lamps are currently pre-rendered onto the fixed
-  1920×1080 `gameCanvas` (assumes the world fits one screen). This still works at the current
-  map size, but once the world exceeds the viewport these layers must become camera-aware
-  (render only the visible region). Flag, don't block, for this first pass.
+- **Fixed-canvas caveat:** fog/lighting/lamps are currently pre-rendered onto full-world
+  offscreen canvases and then camera-translated into the visible viewport. This works for the
+  current `3200x1800` test world, but larger worlds should render only the visible region.
+  Flag, don't block, for this first pass.
 
 ---
 
@@ -127,6 +127,19 @@ Keyboard/mouse equivalents to be decided during implementation (e.g. hold a key 
 | File | Change |
 |------|--------|
 | `game.js` | Add camera state (`cameraX/cameraY`, dead-zone, hard-aim offset, LT input, easing, clamping); apply `ctx.translate` in the draw pipeline; draw HUD after restore |
+| `player.js` | Accept hard-aim state from `game.js`; while held, disable sprint and force movement/noise to the sneak tier |
+| `enemy.js` | Split the red player-hit flash into a screen-space draw helper so it stays outside the camera transform |
 | `design/feature_09_follow_camera_hardaim.md` | This document (new) |
 
 (Fog/lighting camera-awareness is deferred until the map exceeds the viewport.)
+
+---
+
+## Implementation Notes
+
+- `game.js` owns camera state, LT/Shift hard-aim input, dead-zone follow, eased look-ahead,
+  clamping, and the scoped world `ctx.translate(-camera.x, -camera.y)`.
+- `player.js` owns hard-aim movement coupling through `updatePlayer(gp, projectiles,
+  { hardAim })`.
+- The world is now `3200x1800` while the visible canvas/viewport remains `1920x1080`, giving
+  the dead-zone follow and hard-aim look-ahead room to move without changing presentation size.

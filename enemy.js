@@ -1,7 +1,7 @@
 ﻿const ENEMY_DESIGN_WIDTH = 1100;
 const ENEMY_DESIGN_HEIGHT = 750;
-const ENEMY_GAME_WIDTH = 1920;
-const ENEMY_GAME_HEIGHT = 1080;
+const ENEMY_GAME_WIDTH = 3200;
+const ENEMY_GAME_HEIGHT = 1800;
 const ENEMY_SCALE_X = ENEMY_GAME_WIDTH / ENEMY_DESIGN_WIDTH;
 const ENEMY_SCALE_Y = ENEMY_GAME_HEIGHT / ENEMY_DESIGN_HEIGHT;
 const ENEMY_SCALE_UNIT = (ENEMY_SCALE_X + ENEMY_SCALE_Y) / 2;
@@ -776,7 +776,9 @@ function drawSoundEvents() {
     ctx.stroke();
     ctx.restore();
   }
+}
 
+function drawPlayerHitFlash() {
   if (playerHitFlashTimer > 0) {
     ctx.save();
     ctx.globalAlpha = 0.22 * (playerHitFlashTimer / PLAYER_HIT_FLASH_FRAMES);

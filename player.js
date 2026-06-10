@@ -1,7 +1,7 @@
 const PLAYER_DESIGN_WIDTH = 1100;
 const PLAYER_DESIGN_HEIGHT = 750;
-const PLAYER_GAME_WIDTH = 1920;
-const PLAYER_GAME_HEIGHT = 1080;
+const PLAYER_GAME_WIDTH = 3200;
+const PLAYER_GAME_HEIGHT = 1800;
 const PLAYER_SCALE_X = PLAYER_GAME_WIDTH / PLAYER_DESIGN_WIDTH;
 const PLAYER_SCALE_Y = PLAYER_GAME_HEIGHT / PLAYER_DESIGN_HEIGHT;
 const PLAYER_SCALE_UNIT = (PLAYER_SCALE_X + PLAYER_SCALE_Y) / 2;
@@ -38,6 +38,7 @@ const player = {
   noiseScale: PLAYER_WALK_NOISE_SCALE,
   movementMode: 'walk',
   sprintActive: false,
+  hardAim: false,
   angle: 0,
   targetAngle: 0,
 };
@@ -89,21 +90,25 @@ function resetPlayer() {
   player.noiseScale = PLAYER_WALK_NOISE_SCALE;
   player.movementMode = 'walk';
   player.sprintActive = false;
+  player.hardAim = false;
   player.angle = 0;
   player.targetAngle = 0;
 }
 
-function updatePlayer(gp, activeProjectiles) {
+function updatePlayer(gp, activeProjectiles, options = {}) {
   const prevX = player.x, prevY = player.y;
+  const hardAim = options.hardAim === true;
+  player.hardAim = hardAim;
 
   // Face button A toggles sprint. Sprint is intentionally gamepad-only for this pass.
   const sprintPressed = gp?.buttons[0]?.pressed ?? false;
-  if (sprintPressed && !sprintWasPressed) player.sprintActive = !player.sprintActive;
+  if (!hardAim && sprintPressed && !sprintWasPressed) player.sprintActive = !player.sprintActive;
   sprintWasPressed = sprintPressed;
+  if (hardAim) player.sprintActive = false;
 
-  player.speed = PLAYER_WALK_SPEED;
-  player.noiseScale = PLAYER_WALK_NOISE_SCALE;
-  player.movementMode = 'walk';
+  player.speed = hardAim ? PLAYER_SNEAK_SPEED : PLAYER_WALK_SPEED;
+  player.noiseScale = hardAim ? PLAYER_SNEAK_NOISE_SCALE : PLAYER_WALK_NOISE_SCALE;
+  player.movementMode = hardAim ? 'sneak' : 'walk';
 
   // WASD remains a simple walking fallback.
   let keyboardX = 0, keyboardY = 0;
@@ -113,14 +118,19 @@ function updatePlayer(gp, activeProjectiles) {
   if (keys['s']) keyboardY += 1;
   const keyboardMagnitude = Math.hypot(keyboardX, keyboardY);
   if (keyboardMagnitude > 0) {
-    player.x += (keyboardX / keyboardMagnitude) * PLAYER_WALK_SPEED;
-    player.y += (keyboardY / keyboardMagnitude) * PLAYER_WALK_SPEED;
+    const keyboardSpeed = hardAim ? PLAYER_SNEAK_SPEED : PLAYER_WALK_SPEED;
+    player.x += (keyboardX / keyboardMagnitude) * keyboardSpeed;
+    player.y += (keyboardY / keyboardMagnitude) * keyboardSpeed;
   }
 
   // L-stick controls sneak-to-walk analog movement. Stick tilt alone cannot sprint.
   const left = readMoveStick(gp);
   if (left.amount > 0) {
-    if (player.sprintActive) {
+    if (hardAim) {
+      player.speed = PLAYER_SNEAK_SPEED;
+      player.noiseScale = PLAYER_SNEAK_NOISE_SCALE;
+      player.movementMode = 'sneak';
+    } else if (player.sprintActive) {
       player.speed = PLAYER_SPRINT_SPEED;
       player.noiseScale = PLAYER_SPRINT_NOISE_SCALE;
       player.movementMode = 'sprint';

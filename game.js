@@ -3,18 +3,20 @@ const screenCtx = canvas.getContext('2d');
 
 const DESIGN_WIDTH = 1100;
 const DESIGN_HEIGHT = 750;
-const GAME_WIDTH = 1920;
-const GAME_HEIGHT = 1080;
+const GAME_WIDTH = 3200;
+const GAME_HEIGHT = 1800;
 const GAME_SCALE_X = GAME_WIDTH / DESIGN_WIDTH;
 const GAME_SCALE_Y = GAME_HEIGHT / DESIGN_HEIGHT;
 const GAME_SCALE_UNIT = (GAME_SCALE_X + GAME_SCALE_Y) / 2;
-const GAME_SCALE = Math.min(canvas.width / GAME_WIDTH, canvas.height / GAME_HEIGHT);
-const GAME_OFFSET_X = (canvas.width - GAME_WIDTH * GAME_SCALE) / 2;
-const GAME_OFFSET_Y = (canvas.height - GAME_HEIGHT * GAME_SCALE) / 2;
+const VIEWPORT_WIDTH = canvas.width;
+const VIEWPORT_HEIGHT = canvas.height;
+const GAME_SCALE = Math.min(canvas.width / VIEWPORT_WIDTH, canvas.height / VIEWPORT_HEIGHT);
+const GAME_OFFSET_X = (canvas.width - VIEWPORT_WIDTH * GAME_SCALE) / 2;
+const GAME_OFFSET_Y = (canvas.height - VIEWPORT_HEIGHT * GAME_SCALE) / 2;
 
 const gameCanvas = document.createElement('canvas');
-gameCanvas.width = GAME_WIDTH;
-gameCanvas.height = GAME_HEIGHT;
+gameCanvas.width = VIEWPORT_WIDTH;
+gameCanvas.height = VIEWPORT_HEIGHT;
 const ctx = gameCanvas.getContext('2d');
 
 function scaleGameX(x) { return x * GAME_SCALE_X; }
@@ -54,6 +56,22 @@ const WALLS = [
 ].map(scaleGameRect);
 
 const projectiles = [];
+
+const CAM_DEADZONE_W = VIEWPORT_WIDTH * 0.35;
+const CAM_DEADZONE_H = VIEWPORT_HEIGHT * 0.35;
+const CAM_HARDAIM_DIST = Math.max(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+const CAM_CORNER_PADDING = scaleGameUnit(48);
+const CAM_EASE = 0.18;
+const CAM_HARDAIM_EASE = 0.16;
+const CAMERA_MAX_X = Math.max(0, GAME_WIDTH - VIEWPORT_WIDTH);
+const CAMERA_MAX_Y = Math.max(0, GAME_HEIGHT - VIEWPORT_HEIGHT);
+
+const camera = {
+  x: 0,
+  y: 0,
+  lookAheadX: 0,
+  lookAheadY: 0,
+};
 
 
 const LAMP_HIT_RADIUS = scaleGameUnit(10);
@@ -223,8 +241,71 @@ function hitsWall(x, y) {
   return false;
 }
 
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function isHardAimHeld(gp) {
+  const leftTrigger = gp?.buttons[6];
+  const triggerValue = leftTrigger?.value ?? (leftTrigger?.pressed ? 1 : 0);
+  return triggerValue > 0.5 || (keys['Shift'] ?? false);
+}
+
+function getHardAimLookAhead() {
+  const dx = Math.sin(player.angle);
+  const dy = -Math.cos(player.angle);
+  const maxX = Math.abs(dx) > 0.001 ? (VIEWPORT_WIDTH / 2 - CAM_CORNER_PADDING) / Math.abs(dx) : Infinity;
+  const maxY = Math.abs(dy) > 0.001 ? (VIEWPORT_HEIGHT / 2 - CAM_CORNER_PADDING) / Math.abs(dy) : Infinity;
+  const dist = Math.max(0, Math.min(CAM_HARDAIM_DIST, maxX, maxY));
+  return { x: dx * dist, y: dy * dist };
+}
+
+function resetCamera() {
+  camera.x = clamp(player.x - VIEWPORT_WIDTH / 2, 0, CAMERA_MAX_X);
+  camera.y = clamp(player.y - VIEWPORT_HEIGHT / 2, 0, CAMERA_MAX_Y);
+  camera.lookAheadX = 0;
+  camera.lookAheadY = 0;
+}
+
+function updateCamera(hardAimHeld) {
+  const hardAimTarget = hardAimHeld ? getHardAimLookAhead() : { x: 0, y: 0 };
+  camera.lookAheadX = lerp(camera.lookAheadX, hardAimTarget.x, CAM_HARDAIM_EASE);
+  camera.lookAheadY = lerp(camera.lookAheadY, hardAimTarget.y, CAM_HARDAIM_EASE);
+
+  const usingLookAhead = hardAimHeld || Math.hypot(camera.lookAheadX, camera.lookAheadY) > 0.5;
+  let targetX;
+  let targetY;
+
+  if (usingLookAhead) {
+    targetX = player.x + camera.lookAheadX - VIEWPORT_WIDTH / 2;
+    targetY = player.y + camera.lookAheadY - VIEWPORT_HEIGHT / 2;
+  } else {
+    targetX = camera.x;
+    targetY = camera.y;
+
+    const deadLeft = (VIEWPORT_WIDTH - CAM_DEADZONE_W) / 2;
+    const deadRight = deadLeft + CAM_DEADZONE_W;
+    const deadTop = (VIEWPORT_HEIGHT - CAM_DEADZONE_H) / 2;
+    const deadBottom = deadTop + CAM_DEADZONE_H;
+    const screenX = player.x - camera.x;
+    const screenY = player.y - camera.y;
+
+    if (screenX < deadLeft) targetX = player.x - deadLeft;
+    else if (screenX > deadRight) targetX = player.x - deadRight;
+
+    if (screenY < deadTop) targetY = player.y - deadTop;
+    else if (screenY > deadBottom) targetY = player.y - deadBottom;
+  }
+
+  targetX = clamp(targetX, 0, CAMERA_MAX_X);
+  targetY = clamp(targetY, 0, CAMERA_MAX_Y);
+  camera.x = lerp(camera.x, targetX, CAM_EASE);
+  camera.y = lerp(camera.y, targetY, CAM_EASE);
+}
+
 function reset() {
   resetPlayer();
+  resetCamera();
   projectiles.length = 0;
   resetEnemies();
   for (const lamp of LAMPS) lamp.active = true;
@@ -239,7 +320,9 @@ let eWasPressed = false;
 
 function update() {
   const gp = navigator.getGamepads?.()[0] ?? null;
-  updatePlayer(gp, projectiles);
+  const hardAimHeld = isHardAimHeld(gp);
+  updatePlayer(gp, projectiles, { hardAim: hardAimHeld });
+  updateCamera(hardAimHeld);
 
   // B button (button 1) — reset
   const bPressed = gp?.buttons[1]?.pressed ?? false;
@@ -591,7 +674,10 @@ function drawLighting() {
 }
 
 function draw() {
-  ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+
+  ctx.save();
+  ctx.translate(-camera.x, -camera.y);
   drawFloor();
   drawWalls();
   drawLamps();
@@ -606,6 +692,9 @@ function draw() {
   drawGapExits();
   drawPickup();
   if (hasMapKnowledge) drawMapGeometry();
+  ctx.restore();
+
+  drawPlayerHitFlash();
 
   screenCtx.fillStyle = '#000';
   screenCtx.fillRect(0, 0, canvas.width, canvas.height);
@@ -613,8 +702,8 @@ function draw() {
     gameCanvas,
     GAME_OFFSET_X,
     GAME_OFFSET_Y,
-    GAME_WIDTH * GAME_SCALE,
-    GAME_HEIGHT * GAME_SCALE
+    VIEWPORT_WIDTH * GAME_SCALE,
+    VIEWPORT_HEIGHT * GAME_SCALE
   );
 }
 
@@ -624,6 +713,7 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+resetCamera();
 initPickup();
 initExfil();
 loop();
