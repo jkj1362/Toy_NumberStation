@@ -57,12 +57,11 @@ const WALLS = [
 
 const projectiles = [];
 
-const CAM_DEADZONE_W = VIEWPORT_WIDTH * 0.35;
-const CAM_DEADZONE_H = VIEWPORT_HEIGHT * 0.35;
+const CAM_SOFT_LOOKAHEAD_DIST = Math.min(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) * 0.10;
 const CAM_HARDAIM_DIST = Math.max(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 const CAM_CORNER_PADDING = scaleGameUnit(48);
 const CAM_EASE = 0.18;
-const CAM_HARDAIM_EASE = 0.16;
+const CAM_LOOKAHEAD_EASE = 0.16;
 const CAMERA_MAX_X = Math.max(0, GAME_WIDTH - VIEWPORT_WIDTH);
 const CAMERA_MAX_Y = Math.max(0, GAME_HEIGHT - VIEWPORT_HEIGHT);
 
@@ -251,12 +250,12 @@ function isHardAimHeld(gp) {
   return triggerValue > 0.5 || (keys['Shift'] ?? false);
 }
 
-function getHardAimLookAhead() {
+function getCameraLookAhead(distance) {
   const dx = Math.sin(player.angle);
   const dy = -Math.cos(player.angle);
   const maxX = Math.abs(dx) > 0.001 ? (VIEWPORT_WIDTH / 2 - CAM_CORNER_PADDING) / Math.abs(dx) : Infinity;
   const maxY = Math.abs(dy) > 0.001 ? (VIEWPORT_HEIGHT / 2 - CAM_CORNER_PADDING) / Math.abs(dy) : Infinity;
-  const dist = Math.max(0, Math.min(CAM_HARDAIM_DIST, maxX, maxY));
+  const dist = Math.max(0, Math.min(distance, maxX, maxY));
   return { x: dx * dist, y: dy * dist };
 }
 
@@ -268,34 +267,13 @@ function resetCamera() {
 }
 
 function updateCamera(hardAimHeld) {
-  const hardAimTarget = hardAimHeld ? getHardAimLookAhead() : { x: 0, y: 0 };
-  camera.lookAheadX = lerp(camera.lookAheadX, hardAimTarget.x, CAM_HARDAIM_EASE);
-  camera.lookAheadY = lerp(camera.lookAheadY, hardAimTarget.y, CAM_HARDAIM_EASE);
+  const lookAheadDistance = hardAimHeld ? CAM_HARDAIM_DIST : CAM_SOFT_LOOKAHEAD_DIST;
+  const lookAheadTarget = getCameraLookAhead(lookAheadDistance);
+  camera.lookAheadX = lerp(camera.lookAheadX, lookAheadTarget.x, CAM_LOOKAHEAD_EASE);
+  camera.lookAheadY = lerp(camera.lookAheadY, lookAheadTarget.y, CAM_LOOKAHEAD_EASE);
 
-  const usingLookAhead = hardAimHeld || Math.hypot(camera.lookAheadX, camera.lookAheadY) > 0.5;
-  let targetX;
-  let targetY;
-
-  if (usingLookAhead) {
-    targetX = player.x + camera.lookAheadX - VIEWPORT_WIDTH / 2;
-    targetY = player.y + camera.lookAheadY - VIEWPORT_HEIGHT / 2;
-  } else {
-    targetX = camera.x;
-    targetY = camera.y;
-
-    const deadLeft = (VIEWPORT_WIDTH - CAM_DEADZONE_W) / 2;
-    const deadRight = deadLeft + CAM_DEADZONE_W;
-    const deadTop = (VIEWPORT_HEIGHT - CAM_DEADZONE_H) / 2;
-    const deadBottom = deadTop + CAM_DEADZONE_H;
-    const screenX = player.x - camera.x;
-    const screenY = player.y - camera.y;
-
-    if (screenX < deadLeft) targetX = player.x - deadLeft;
-    else if (screenX > deadRight) targetX = player.x - deadRight;
-
-    if (screenY < deadTop) targetY = player.y - deadTop;
-    else if (screenY > deadBottom) targetY = player.y - deadBottom;
-  }
+  let targetX = player.x + camera.lookAheadX - VIEWPORT_WIDTH / 2;
+  let targetY = player.y + camera.lookAheadY - VIEWPORT_HEIGHT / 2;
 
   targetX = clamp(targetX, 0, CAMERA_MAX_X);
   targetY = clamp(targetY, 0, CAMERA_MAX_Y);
