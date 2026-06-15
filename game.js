@@ -73,29 +73,36 @@ const camera = {
 };
 
 
-const LAMP_HIT_RADIUS = scaleGameUnit(10);
+const MISSION_LIGHTING = {
+  globalAmbient: 0.0,
+  zones: [
+    { id: 'lobby_lamp_spill', x: 320, y: 458, w: 380, h: 170, ambient: 0.10 },
+    { id: 'entry_dim_spill', x: 430, y: 640, w: 140, h: 92, ambient: 0.08 },
+  ],
+  lamps: [
+    { x: 200, y:  18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 580, y:  18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 920, y:  18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 200, y: 440, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 580, y: 440, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 920, y: 440, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 350, y: 458, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 700, y: 458, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 350, y: 732, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 700, y: 732, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x:  18, y: 630, wallSide: 'W', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x:1082, y: 590, wallSide: 'E', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+  ],
+};
+
 // Rules: (1) at least one lamp per room, (2) same-wall lamp spacing >= radius
 // Radius = 200. Same-wall gaps: top/corridor-S x-gaps are 380 & 340; lobby N gap is 300. All >= 200.
-const LAMPS = [
   // Top wall — one per room section, spacing 380 / 340
-  { x: 200, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  { x: 580, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  { x: 920, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
   // Corridor wall south face — mirrors top wall, lights lower half of each room
-  { x: 200, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  { x: 580, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  { x: 920, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   // Corridor wall south face (lobby side, y=458 = bottom edge of wall) — lights lobby from above
-  { x: 350, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  { x: 700, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
   // Bottom wall — lights lobby from below, flanking the entry gap (x:430–570), spacing 350
-  { x: 350, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  { x: 700, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
   // Entry area — left perimeter wall
-  { x:  18, y: 630, wallSide: 'W', radius: 200, color: '#ffdc96', active: true },
   // Room F — right perimeter wall
-  { x:1082, y: 590, wallSide: 'E', radius: 200, color: '#ffdc96', active: true },
-].map(lamp => ({ ...scaleGamePoint(lamp), radius: scaleGameUnit(lamp.radius) }));
 
 // Wall duct/window exits — manually activated bonus exfil points
 const WALL_GAP_EXITS = [
@@ -106,12 +113,6 @@ let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
 const INTERACT_RADIUS = scaleGameUnit(30);
 const EXFIL_RADIUS    = scaleGameUnit(40);
-const LAMP_OFFSETS = {
-  N: [0, scaleGameY(8)],
-  S: [0, -scaleGameY(8)],
-  E: [-scaleGameX(8), 0],
-  W: [scaleGameX(8), 0],
-};
 
 // Precomputed wall segments and corners for visibility raycasting (static — walls never move)
 const WALL_SEGMENTS = (() => {
@@ -166,34 +167,14 @@ function inVisionCone(wx, wy) {
 }
 
 function isLit(wx, wy) {
-  // Player's own ambient glow
-  const pdx = wx - player.x, pdy = wy - player.y;
-  if (pdx * pdx + pdy * pdy <= PLAYER_GLOW_RADIUS * PLAYER_GLOW_RADIUS) return true;
-  // Active lamp coverage
-  for (const lamp of LAMPS) {
-    if (!lamp.active) continue;
-    const [odx, ody] = LAMP_OFFSETS[lamp.wallSide];
-    const dx = wx - (lamp.x + odx), dy = wy - (lamp.y + ody);
-    if (dx * dx + dy * dy <= lamp.radius * lamp.radius) return true;
-  }
-  return false;
+  return getLightLevel(wx, wy, { includePlayerGlow: true }) >= PLAYER_VISIBLE_LIGHT_THRESHOLD;
 }
 
 // Lamp-only variant — excludes the player's self-glow. Used by enemy detection so
 // the player's ambient light doesn't make them permanently visible to guards.
 function isLitByLamps(wx, wy) {
-  for (const lamp of LAMPS) {
-    if (!lamp.active) continue;
+  return getLightLevel(wx, wy, { includePlayerGlow: false }) >= ENEMY_BRIGHT_LIGHT_THRESHOLD;
     // Half-plane clip — mirrors the rect clip in drawLighting so detection matches visuals
-    if (lamp.wallSide === 'N' && wy < lamp.y - scaleGameY(18)) continue; // N lamp lights downward only
-    if (lamp.wallSide === 'S' && wy > lamp.y + scaleGameY(18)) continue; // S lamp lights upward only
-    if (lamp.wallSide === 'E' && wx > lamp.x + scaleGameX(18)) continue; // E lamp lights leftward only
-    if (lamp.wallSide === 'W' && wx < lamp.x - scaleGameX(18)) continue; // W lamp lights rightward only
-    const [odx, ody] = LAMP_OFFSETS[lamp.wallSide];
-    const dx = wx - (lamp.x + odx), dy = wy - (lamp.y + ody);
-    if (dx * dx + dy * dy <= lamp.radius * lamp.radius) return true;
-  }
-  return false;
 }
 
 function initPickup() {
@@ -286,7 +267,7 @@ function reset() {
   resetCamera();
   projectiles.length = 0;
   resetEnemies();
-  for (const lamp of LAMPS) lamp.active = true;
+  resetLighting();
   gamePhase = 'infiltrate';
   gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
   initPickup();
@@ -370,18 +351,7 @@ function update() {
       }
     }
 
-    if (!hit) {
-      for (const lamp of LAMPS) {
-        if (!lamp.active) continue;
-        const ldx = p.x - lamp.x;
-        const ldy = p.y - lamp.y;
-        if (ldx * ldx + ldy * ldy <= LAMP_HIT_RADIUS * LAMP_HIT_RADIUS) {
-          lamp.active = false;
-          hit = true;
-          break;
-        }
-      }
-    }
+    if (!hit && hitLampAt(p.x, p.y)) hit = true;
 
     if (hit || hitsWall(p.x, p.y) || p.x < 0 || p.x > GAME_WIDTH || p.y < 0 || p.y > GAME_HEIGHT) {
       projectiles.splice(i, 1);
@@ -476,9 +446,6 @@ function computeVisibilityPolygon(px, py, playerAngle, visionAngle = VISION_ANGL
 const fogCanvas = document.createElement('canvas');
 const fogCtx = fogCanvas.getContext('2d');
 
-const lightCanvas = document.createElement('canvas');
-const lightCtx = lightCanvas.getContext('2d');
-
 function drawFog() {
   const PROXIMITY_RADIUS = PLAYER_PROXIMITY_RADIUS;
 
@@ -511,15 +478,6 @@ function drawFog() {
   fogCtx.globalCompositeOperation = 'source-over';
 
   ctx.drawImage(fogCanvas, 0, 0);
-}
-
-function drawLamps() {
-  for (const lamp of LAMPS) {
-    ctx.fillStyle = lamp.active ? lamp.color : '#444';
-    ctx.beginPath();
-    ctx.arc(lamp.x, lamp.y, scaleGameUnit(8), 0, Math.PI * 2);
-    ctx.fill();
-  }
 }
 
 function drawPickup() {
@@ -598,59 +556,6 @@ function drawExfilPoints() {
   }
 }
 
-function drawLighting() {
-  if (lightCanvas.width !== GAME_WIDTH || lightCanvas.height !== GAME_HEIGHT) {
-    lightCanvas.width = GAME_WIDTH;
-    lightCanvas.height = GAME_HEIGHT;
-  }
-
-  lightCtx.clearRect(0, 0, lightCanvas.width, lightCanvas.height);
-  lightCtx.fillStyle = 'rgba(0, 0, 0, 1)';
-  lightCtx.fillRect(0, 0, lightCanvas.width, lightCanvas.height);
-
-  const W = lightCanvas.width, H = lightCanvas.height;
-  lightCtx.globalCompositeOperation = 'destination-out';
-  for (const lamp of LAMPS) {
-    if (!lamp.active) continue;
-    const [odx, ody] = LAMP_OFFSETS[lamp.wallSide];
-    const cx = lamp.x + odx;
-    const cy = lamp.y + ody;
-
-    // Clip to the half-plane the lamp faces so light can't cross the wall it's on
-    lightCtx.save();
-    lightCtx.beginPath();
-    if      (lamp.wallSide === 'N') lightCtx.rect(0, lamp.y - scaleGameY(18), W, H);
-    else if (lamp.wallSide === 'S') lightCtx.rect(0, 0,                         W, lamp.y + scaleGameY(18));
-    else if (lamp.wallSide === 'E') lightCtx.rect(0, 0,                         lamp.x + scaleGameX(18), H);
-    else                            lightCtx.rect(lamp.x - scaleGameX(18), 0,   W, H);
-    lightCtx.clip();
-
-    const grad = lightCtx.createRadialGradient(cx, cy, 0, cx, cy, lamp.radius);
-    grad.addColorStop(0,    'rgba(255,255,255,1)');
-    grad.addColorStop(0.75, 'rgba(255,255,255,1)');
-    grad.addColorStop(1,    'rgba(255,255,255,0)');
-    lightCtx.fillStyle = grad;
-    lightCtx.beginPath();
-    lightCtx.arc(cx, cy, lamp.radius, 0, Math.PI * 2);
-    lightCtx.fill();
-    lightCtx.restore();
-  }
-
-  // Player emits a small ambient glow — always visible as a light source
-  const pg = lightCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, PLAYER_GLOW_RADIUS);
-  pg.addColorStop(0,   'rgba(255,255,255,1)');
-  pg.addColorStop(0.4, 'rgba(255,255,255,1)');
-  pg.addColorStop(1,   'rgba(255,255,255,0)');
-  lightCtx.fillStyle = pg;
-  lightCtx.beginPath();
-  lightCtx.arc(player.x, player.y, PLAYER_GLOW_RADIUS, 0, Math.PI * 2);
-  lightCtx.fill();
-
-  lightCtx.globalCompositeOperation = 'source-over';
-
-  ctx.drawImage(lightCanvas, 0, 0);
-}
-
 function draw() {
   ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 
@@ -691,6 +596,7 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+initLighting(MISSION_LIGHTING);
 resetCamera();
 initPickup();
 initExfil();

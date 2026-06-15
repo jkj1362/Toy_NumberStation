@@ -1,162 +1,309 @@
-# Feature 01b — Wall-Mounted Lamps & Darkness
+# Feature 02 - Lighting Renovation
 
-**Status: DONE** — implemented in game.js
+**Status: DONE - GEOMETRY REVISION IMPLEMENTED**
 
-## Concept
+The first lighting pass was implemented in `game.js`: wall lamps cut circular bright areas out
+of an otherwise black darkness layer, and enemy sight used `isLitByLamps()` as a boolean gate.
+That v1 proved the stealth loop, but it was too binary for hard-aim scouting and for future
+multi-mission scalability.
 
-Lights are physically attached to walls — corridor sconces and wall-mounted lanterns. They project a soft radial glow outward from the wall face. The corridor has sparse lamps; rooms have fuller coverage. All lamps can be **shot out** by the player, creating tactical shadow cover.
-
-Standalone room lamps (desk lamps, floor lamps) are deferred.
+This revision promotes lighting into a reusable system initialized from mission-specific
+lighting data. Direct lamp light now spreads through open space until blocked by walls, fades
+with distance, and stops at a maximum range. The current mission is only the first data set,
+not a special case baked into the lighting code. Default darkness remains true darkness;
+readability comes only from authored light sources, authored ambient/spill zones, and the
+player's local glow.
 
 ---
 
-## Data Structure
+## Problem Diagnosis
 
-```javascript
-// wallSide: which face of the wall the lamp is on
-// 'N' = lamp on north wall (top), light projects south
-// 'S' = lamp on south wall (bottom), light projects north
-// 'E' = lamp on east wall (right), light projects west
-// 'W' = lamp on west wall (left), light projects east
-// active: false when shot out (permanent until reset)
+The current lighting model creates "lamp-pool stealth":
 
-const LAMP_HIT_RADIUS = 10;
-// Placement rules: (1) at least one lamp per room, (2) same-wall spacing >= radius.
-// Uniform radius = 200. Same-wall gaps: top/corridor-S x-gaps 380 & 340; lobby N gap 300. All >= 200.
-const LAMPS = [
-  // Top wall — one per room section, spacing 380 / 340
-  { x: 200, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  { x: 580, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  { x: 920, y:  18, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  // Corridor wall south face — mirrors top wall, lights lower half of each room
-  { x: 200, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  { x: 580, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  { x: 920, y: 440, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  // Corridor wall south face (lobby side, y=458 = bottom edge of wall) — lights lobby from above
-  { x: 350, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  { x: 700, y: 458, wallSide: 'N', radius: 200, color: '#ffdc96', active: true },
-  // Bottom wall — lights lobby from below, flanking the entry gap (x:430–570), spacing 350
-  { x: 350, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  { x: 700, y: 732, wallSide: 'S', radius: 200, color: '#ffdc96', active: true },
-  // Entry area — left perimeter wall
-  { x:  18, y: 630, wallSide: 'W', radius: 200, color: '#ffdc96', active: true },
-  // Room F — right perimeter wall
-  { x:1082, y: 590, wallSide: 'E', radius: 200, color: '#ffdc96', active: true },
-];
+- `drawLighting()` fills the world with opaque black.
+- Each active lamp erases a circular/half-plane region from the darkness.
+- `enemyCanSeeCone()` returns false whenever `isLitByLamps(player.x, player.y)` is false.
+
+This creates unnatural gameplay:
+
+- Open floor near a lit area can become mechanically invisible just because it is outside a
+  lamp radius.
+- Enemy sight checks only the player center point, not a body-sized visibility footprint.
+- Darkness has no gradation: there is no dim room ambience, silhouette visibility, spill, or
+  low-confidence recognition.
+- Hard aim can reveal more screen space without revealing more useful information, because
+  much of the forward view remains pure black unless a lamp covers it.
+
+The renovated system must represent light as a **level**, not a boolean, while still allowing
+`0.0` pure darkness as a deliberate authored stealth state.
+
+---
+
+## Architecture Direction
+
+Create a reusable `lighting.js` module loaded before `enemy.js` and `game.js`:
+
+```html
+<script src="player.js"></script>
+<script src="lighting.js"></script>
+<script src="enemy.js"></script>
+<script src="game.js"></script>
 ```
 
-All lamps use warm yellow (`#ffdc96`). Color distinction between rooms is deferred — not worth the visual noise in the prototype without the full atmosphere context.
+`lighting.js` owns lighting behavior. Mission data owns lamp placement and ambient zones.
+
+| Owner | Responsibility |
+|-------|----------------|
+| `lighting.js` | Runtime lamp state, light-level sampling, lighting render pass, lamp drawing, reset/init helpers |
+| Mission data | Lamps, room/zone ambient values, optional global ambient defaults |
+| `game.js` | Current mission orchestration, projectile collision ordering, draw order, camera transform |
+| `enemy.js` | Enemy detection decisions using lighting API thresholds |
+
+Do **not** hardcode one mission's lamp list inside `lighting.js` long-term. The current
+implementation keeps mission data in `game.js` until a dedicated mission file exists, but the
+lighting API accepts mission-provided data.
 
 ---
 
-## Light Projection Direction
+## Mission Lighting Data
 
-The `wallSide` determines a small offset applied to the radial gradient center, pushing it slightly into the room (away from the wall face):
+Target shape:
 
-| wallSide | Gradient center offset | Light projects toward |
-|----------|------------------------|-----------------------|
-| N | `(0, +8)` | South (down, into room) |
-| S | `(0, −8)` | North (up, into room) |
-| E | `(−8, 0)` | West (left, into room) |
-| W | `(+8, 0)` | East (right, into room) |
+```javascript
+const missionLighting = {
+  globalAmbient: 0.0,
+  zones: [
+    { id: 'lobby_lamp_spill', x: 320, y: 458, w: 360, h: 170, ambient: 0.10 },
+    { id: 'entry_dim_spill', x: 430, y: 620, w: 140, h: 112, ambient: 0.08 },
+  ],
+  lamps: [
+    { x: 200, y: 18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+  ],
+};
+```
 
-The gradient is a full radial circle — the offset is cosmetic, positioning the brightest point just off the wall face.
+Data remains authored in design-space coordinates (`1100x750`) and scaled at initialization,
+matching the current wall/enemy/player setup.
 
-### Half-plane clip
+### Lamp Fields
 
-A lamp on the north wall must not bleed light upward through the wall. `drawLighting` enforces this with a canvas clip rect before drawing each lamp's gradient:
+| Field | Meaning |
+|-------|---------|
+| `x`, `y` | Fixture position in mission design-space coordinates |
+| `wallSide` | `N`, `S`, `E`, or `W`; controls half-plane projection |
+| `radius` | Maximum direct lamp reach; light cannot contribute beyond this even in open space |
+| `intensity` | Peak light contribution near the fixture, normally `0.0..1.0`; keep this high when the directly lit area should read as bright |
+| `falloffPower` | Distance fade curve; higher values make light fall off faster and preserve more dark gaps |
+| `color` | Render tint for fixture/glow |
+| `active` | Runtime shoot-out state; reset from mission defaults |
 
-| wallSide | Clip rect | Effect |
-|----------|-----------|--------|
-| N | `(0, lamp.y−18, W, H)` | Light only below the wall |
-| S | `(0, 0, W, lamp.y+18)` | Light only above the wall |
-| E | `(0, 0, lamp.x+18, H)` | Light only left of the wall |
-| W | `(lamp.x−18, 0, W, H)` | Light only right of the wall |
+### Ambient Zone Fields
 
-**Critical:** any code that tests whether a point is lit by a lamp must apply this same half-plane check — otherwise points on the wrong side of a wall will pass the circle radius test even though they are visually dark. See `isLitByLamps` below.
+| Field | Meaning |
+|-------|---------|
+| `id` | Debug/readability label |
+| `x`, `y`, `w`, `h` | Rectangular room/area in mission design-space coordinates |
+| `ambient` | Baseline light level inside the zone |
+
+Rectangular zones are sufficient for the current prototype. Irregular room ambience can be
+added later only if needed.
+
+Do not use ambient zones as a blanket fix for the whole map. They should represent specific
+fictional causes: lamp spill, open door spill, window/moonlight strips, emergency signs, or
+rooms intentionally readable despite not being bright.
+
+For the current Cold War-era atmosphere, keep direct lamp `intensity` near `1.0` so areas
+close to a fixture still read as clearly lit. Control the older, weaker-fixture feeling with
+`radius` and `falloffPower`: radius controls how much of the room an intact fixture can reach,
+while falloff controls how quickly brightness decays from the source. In the default state,
+room lamps should broadly brighten their room; stealth gaps should come from broken lamps,
+corners, occluding geometry, and authored spill/ambient differences.
+
+---
+
+## Public Lighting API
+
+`lighting.js` should expose these globals for the current plain-script architecture:
+
+```javascript
+function initLighting(missionLighting) {}
+function resetLighting() {}
+function drawLamps() {}
+function drawLighting() {}
+function getLightLevel(wx, wy, options = {}) {}
+function isLit(wx, wy) {}
+function isLitByLamps(wx, wy) {}
+```
+
+### `initLighting(missionLighting)`
+
+Scales mission lighting data into world coordinates and creates runtime lamp/zone state.
+Called during mission setup before the first update/draw.
+
+### `resetLighting()`
+
+Restores all lamps to their mission default `active` state. Called by `reset()`.
+
+### `getLightLevel(wx, wy, options = {})`
+
+Returns a normalized light level in `0.0..1.0`.
+
+Required behavior:
+
+- Start from `globalAmbient`, normally `0.0` for this game.
+- Add the highest containing zone ambient if the point is inside one or more zones.
+- Add active lamp contribution only when the point is inside the lamp's wall-side half-plane,
+  inside the lamp's geometry visibility polygon, and within the lamp's max range.
+- Apply distance falloff from the fixture origin so brightness is strongest near the light
+  source and weaker near the range edge.
+- Include the player's self-glow only when `options.includePlayerGlow === true`.
+- Clamp final value to `0.0..1.0`.
+
+Use max-composition for ambient and lamp contributions rather than summing everything
+unbounded. This keeps multiple nearby lamps from blowing out the whole room.
+
+### Compatibility Helpers
+
+Keep these wrappers during migration:
+
+```javascript
+function isLit(wx, wy) {
+  return getLightLevel(wx, wy, { includePlayerGlow: true }) >= PLAYER_VISIBLE_LIGHT_THRESHOLD;
+}
+
+function isLitByLamps(wx, wy) {
+  return getLightLevel(wx, wy, { includePlayerGlow: false }) >= ENEMY_BRIGHT_LIGHT_THRESHOLD;
+}
+```
+
+Existing callers can keep working while enemy/player visibility gradually moves to richer
+thresholds.
+
+---
+
+## Visibility Thresholds
+
+Initial constants:
+
+| Constant | Starting value | Meaning |
+|----------|----------------|---------|
+| `LIGHT_GLOBAL_AMBIENT` | `0.0` | Default pure darkness outside authored light/spill |
+| `PLAYER_VISIBLE_LIGHT_THRESHOLD` | `0.14` | Minimum light for player-facing marker/object visibility |
+| `ENEMY_DIM_LIGHT_THRESHOLD` | `0.18` | Low-confidence/silhouette visibility |
+| `ENEMY_BRIGHT_LIGHT_THRESHOLD` | `0.35` | Full enemy cone detection |
+
+Enemy sight should not stay permanently binary. Target behavior:
+
+- Bright light: normal cone sight.
+- Dim light: reduced confidence, shorter confirmation range, or slower suspicion buildup.
+- Darkness: cone sight fails except for close proximity/sound systems.
+
+The first implementation may preserve the existing boolean enemy call path by mapping
+`isLitByLamps()` to `ENEMY_BRIGHT_LIGHT_THRESHOLD`, but the API must support dim-light logic
+for the hard-aim follow-up.
+
+---
+
+## Rendering Model
+
+Replace "everything black except lamp cutouts" with a layered darkness mask, while preserving
+true black where no authored light source applies:
+
+1. Clear `lightCanvas`.
+2. Fill with a darkness alpha derived from `globalAmbient` (`0.0` means full darkness).
+3. Apply ambient zones as broad rectangular/softened reductions in darkness.
+4. Apply active lamp radial gradients clipped to the lamp's geometry visibility polygon,
+   wall-side half-plane, and max range.
+5. Apply player self-glow as a small local reduction in darkness.
+6. Draw the resulting darkness layer over the world.
+
+Rendering and gameplay sampling must use the same conceptual values: geometry blocking,
+distance falloff, max range, and authored spill zones. Exact pixel gradients do not need to be
+sampled from the canvas, but `getLightLevel()` and `drawLighting()` must share the same source
+data and falloff assumptions.
+
+Current draw order remains:
+
+```text
+drawFloor()
+drawWalls()
+drawLamps()
+drawEnemies()
+drawProjectiles()
+drawPlayer()
+drawLighting()
+drawFog()
+debug/HUD/world markers as currently ordered
+```
+
+The camera transform remains owned by `game.js`; lighting renders in world space under that
+transform.
 
 ---
 
 ## Shootability
 
-When a projectile's center comes within `LAMP_HIT_RADIUS` (10px) of a lamp, set `lamp.active = false`. The lamp goes dark permanently for the session. `reset()` restores all lamps to `active: true`.
+Lamp shoot-out behavior remains:
 
----
+- Projectiles can disable active lamps.
+- `LAMP_HIT_RADIUS` stays in the lighting system.
+- `game.js` may still orchestrate projectile collision order, but lamp hit testing should call
+  a lighting helper instead of directly mutating a `LAMPS` array.
 
-## Lit-area Helpers
+Target helper:
 
-Two functions in `game.js` answer the question "is a world point lit?":
-
-### `isLit(wx, wy)`
-Returns true if the point is within any active lamp's radius **or** within the player's 80px self-glow. Used for gameplay visibility checks (whether an icon is visible to the player, whether an exfil point is discoverable). Does **not** apply the half-plane clip — acceptable because these checks are player-perspective and the self-glow is intentional.
-
-### `isLitByLamps(wx, wy)`
-Returns true only if the point is within an active lamp's radius **and** within that lamp's lit half-plane. Does not count the player's self-glow. Used by enemy detection — enemies should not see a player in genuine darkness just because the player emits a personal ambient glow. Applies the same half-plane clip as `drawLighting`, so its result exactly matches what is visually rendered on screen.
-
-**Rule:** use `isLit` for player-facing visibility; use `isLitByLamps` for enemy detection and any system where the result must match the visual darkness.
-
----
-
-## Darkness Rendering
-
-Same compositing technique as the existing fog of war (`fogCanvas` / `destination-out`):
-
-```
-1. Create offscreen lightCanvas (same size as main canvas)
-2. Fill with darkness: rgba(0, 0, 0, 0.82)
-3. Set globalCompositeOperation = 'destination-out'
-4. For each active lamp:
-   a. Compute center = (lamp.x + offset.dx, lamp.y + offset.dy)
-   b. Create radial gradient: inner alpha 1.0 → outer alpha 0.0
-   c. Fill circle of lamp.radius — erases darkness proportional to gradient alpha
-5. Reset to 'source-over'
-6. ctx.drawImage(lightCanvas, 0, 0)
+```javascript
+function hitLampAt(wx, wy) {
+  // returns true and deactivates one lamp if the point hits an active fixture
+}
 ```
 
-Net visual result:
-- Lit area within player vision → fully visible
-- Dark area within player vision → pitch black (lighting + fog both opaque)
-- Outside vision cone → covered by fog regardless of lighting
-- Shot-out lamp zone → dark; player has tactical cover there
-- Wall surfaces block the vision cone — light pools behind walls are invisible even if the player faces that direction
+This avoids exposing lamp runtime storage as a mission-specific global.
 
 ---
 
-## Draw Order
+## Implementation Guide
 
-```
-1.  clearRect
-2.  drawFloor()          — dark floor (#1e1e1e)
-3.  drawWalls()          — wall rects (#4a4a4a)
-4.  drawLamps()          — fixture dots on wall faces  ← NEW
-5.  enemies
-6.  projectiles
-7.  drawPlayer()
-8.  drawLighting()       — darkness layer with lamp cutouts  ← NEW
-9.  drawFog()            — player vision cone (on top of lighting)
-```
-
-`drawLamps()` goes before lighting so the fixture dot sits in the scene and is subject to the darkness layer — active lamps appear lit by their own cutout, shot-out lamps appear as a dark marker.
-
----
-
-## Implementation Checklist
-
-- [x] Add `LAMP_HIT_RADIUS` and `LAMPS` constants
-- [x] Add offscreen `lightCanvas` / `lightCtx` (after `fogCanvas`)
-- [x] Add `drawLamps()` — 4px dot per fixture, `lamp.color` when active, `#444` when shot out
-- [x] Add `drawLighting()` — offscreen canvas + `destination-out` radial gradients
-- [x] Add lamp hit detection inside projectile loop (after enemy check, before wall cull)
-- [x] Add `for (const lamp of LAMPS) lamp.active = true` to `reset()`
-- [x] Update `draw()` order: insert `drawLamps()` after `drawWalls()`, `drawLighting()` between `drawPlayer()` and `drawFog()`
+1. Add `lighting.js` and load it between `player.js` and `enemy.js`.
+2. Move current lamp constants, offsets, light canvas, lamp drawing, and lighting drawing from
+   `game.js` into `lighting.js`.
+3. Change lighting storage from hardcoded `LAMPS` to runtime state initialized by
+   `initLighting(missionLighting)`.
+4. Add `getLightLevel(wx, wy, options)` with global ambient, zone ambient, geometry-blocked
+   lamp falloff, max range, and optional player glow.
+5. Keep `isLit()` and `isLitByLamps()` wrappers so existing pickup/exfil/enemy code continues
+   working during the first migration.
+6. Replace direct lamp reset/mutation in `game.js` with `resetLighting()` and `hitLampAt()`.
+7. Update enemy sight only as far as needed for compatibility in this pass. Rich dim-light
+   suspicion behavior can follow after the lighting model is stable.
+8. Perform a visual screenshot check after implementation. The expected visual is true dark
+   zones where soundwaves matter, authored dim spill/readability near plausible sources, and
+   direct lamp light that travels through open space but stops cleanly at walls.
 
 ---
 
-## Resolved Open Questions
+## Success Criteria
 
-| # | Question | Decision |
-|---|---------|----------|
-| 1 | Windows? | **Deferred.** Walls are solid. No partial transparency in this prototype. |
-| 2 | Lights shootable? | **Yes** — wall lamps can be shot out. Standalone lamps deferred. |
-| 3 | Corridor lighting? | **Dim** — two sparse blue-white wall lamps. Player has cover between lamp pools. |
-| 4 | Entry/exfil zone visuals? | **Decided in Feature 03.** Walls and lighting don't depend on this. |
+- Lighting code is reusable across missions and does not depend on one hardcoded lamp list.
+- The current mission can initialize lighting from mission-style data.
+- Open floor stays pure dark by default, while authored spill/ambient zones create dim
+  readability only where intended.
+- Lamps still create stronger local pools, fade with distance, stop at walls, respect max
+  range, and can still be shot out.
+- Existing pickup/exfil visibility and enemy sight continue to function through compatibility
+  helpers.
+- `getLightLevel()` provides a stable base for future hard-aim and dim-light enemy detection.
+- Screenshot QA confirms the lighting no longer reads as only hard circular islands in a black
+  void, and that direct light does not visibly leak through walls.
+
+---
+
+## Deferred Decisions
+
+| Topic | Decision |
+|-------|----------|
+| Dedicated mission files | Deferred. The API should support them, but data may remain near `game.js` for the first migration. |
+| Irregular ambient zones | Deferred. Rectangular zones are enough for the prototype. |
+| Full dim-light suspicion rules | Deferred until after the light-level API is in place. |
+| Windows/transparent wall openings | Deferred. Walls remain solid for this prototype. |
+| Standalone lamps | Deferred. Wall lamps remain the first supported source type. |
