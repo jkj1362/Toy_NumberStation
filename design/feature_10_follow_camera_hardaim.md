@@ -1,4 +1,4 @@
-# Feature 09 — Follow Camera & Hard-Aim Scouting
+# Feature 10 - Follow Camera & Hard-Aim Scouting
 
 **Status: DONE**
 
@@ -7,7 +7,7 @@
 ## Overview
 
 The game currently renders the entire fixed map with a static camera, giving the player full
-situational awareness. Feature 09 replaces this with a **player-following camera** to restore
+situational awareness. Feature 10 replaces this with a **player-following camera** to restore
 the core stealth tension of *information denial* — threats arrive on-screen late, compounding
 the existing line-of-sight fog and enemy vision cones.
 
@@ -147,7 +147,7 @@ Useful ratios to preserve:
 | `game.js` | Add camera state (`cameraX/cameraY`, soft look-ahead, hard-aim offset, LT input, easing, clamping); apply `ctx.translate` in the draw pipeline; draw HUD after restore |
 | `player.js` | Accept hard-aim state from `game.js`; while held, disable sprint and force movement/noise to the sneak tier |
 | `enemy.js` | Split the red player-hit flash into a screen-space draw helper so it stays outside the camera transform |
-| `design/feature_09_follow_camera_hardaim.md` | This document (new) |
+| `design/feature_10_follow_camera_hardaim.md` | This document |
 
 (Fog/lighting camera-awareness is deferred until the map exceeds the viewport.)
 

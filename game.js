@@ -30,27 +30,27 @@ function scaleGamePoint(p) {
 }
 
 const WALLS = [
-  // Outer perimeter — entry gap x:430–570 at bottom
+  // Outer perimeter - entry gap x:430-570 at bottom
   { x:    0, y:   0, w: 1100, h:  18 },
   { x:    0, y: 732, w:  430, h:  18 },
   { x:  570, y: 732, w:  530, h:  18 },
-  { x:    0, y:   0, w:   18, h: 160 }, // left perimeter — gap y:160–220 (duct, Room A)
+  { x:    0, y:   0, w:   18, h: 160 }, // left perimeter - gap y:160-220 (duct, Room A)
   { x:    0, y: 220, w:   18, h: 530 },
-  { x: 1082, y:   0, w:   18, h: 160 }, // right perimeter — gap y:160–220 (duct, Room B/C)
+  { x: 1082, y:   0, w:   18, h: 160 }, // right perimeter - gap y:160-220 (duct, Room B/C)
   { x: 1082, y: 220, w:   18, h: 530 },
-  // Corridor wall at y=440 — left gap x:220–320, right gap x:778–860
+  // Corridor wall at y=440 - left gap x:220-320, right gap x:778-860
   // Center extends to x=778 (not x=760) to close corner with Room B/C divider
   { x:   18, y: 440, w:  202, h:  18 },
   { x:  320, y: 440, w:  458, h:  18 },
   { x:  860, y: 440, w:  222, h:  18 },
-  // Room A (objective) east wall at x=400 — gap y:250–340
+  // Room A (objective) east wall at x=400 - gap y:250-340
   { x:  400, y:  18, w:  18, h: 232 },
   { x:  400, y: 340, w:  18, h: 100 },
-  // Room B/C divider at x=760 — gap y:160–260
+  // Room B/C divider at x=760 - gap y:160-260
   { x:  760, y:  18, w:  18, h: 142 },
   { x:  760, y: 260, w:  18, h: 180 },
-  // Room F (guard) west wall at x=900 — gap y:540–640
-  // x=900 is within corridor right (x=860–1082) so top connects cleanly
+  // Room F (guard) west wall at x=900 - gap y:540-640
+  // x=900 is within corridor right (x=860-1082) so top connects cleanly
   { x:  900, y: 440, w:  18, h: 100 },
   { x:  900, y: 640, w:  18, h:  92 },
 ].map(scaleGameRect);
@@ -78,33 +78,33 @@ const MISSION_LIGHTING = {
   zones: [
     { id: 'lobby_lamp_spill', x: 320, y: 458, w: 380, h: 170, ambient: 0.10 },
     { id: 'entry_dim_spill', x: 430, y: 640, w: 140, h: 92, ambient: 0.08 },
+    { id: 'corridor_left_threshold_spill', x: 220, y: 430, w: 100, h: 44, ambient: 0.06 },
+    { id: 'corridor_right_threshold_spill', x: 778, y: 430, w: 82, h: 44, ambient: 0.06 },
   ],
   lamps: [
-    { x: 200, y:  18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 580, y:  18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 920, y:  18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 200, y: 440, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 580, y: 440, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 920, y: 440, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 350, y: 458, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 700, y: 458, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 350, y: 732, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x: 700, y: 732, wallSide: 'S', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x:  18, y: 630, wallSide: 'W', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
-    { x:1082, y: 590, wallSide: 'E', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 200, y:  18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 580, y:  18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 920, y:  18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 200, y: 440, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 580, y: 440, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 920, y: 440, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 350, y: 458, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 700, y: 458, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 350, y: 732, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 700, y: 732, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x:  18, y: 630, wallSide: 'W', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x:1082, y: 590, wallSide: 'E', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+  ],
+  apertures: [
+    { id: 'room_a_west_window_moonlight', kind: 'window', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
+    { id: 'room_bc_east_window_moonlight', kind: 'window', x: 1082, y: 190, direction: 'W', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
   ],
 };
 
-// Rules: (1) at least one lamp per room, (2) same-wall lamp spacing >= radius
-// Radius = 200. Same-wall gaps: top/corridor-S x-gaps are 380 & 340; lobby N gap is 300. All >= 200.
-  // Top wall — one per room section, spacing 380 / 340
-  // Corridor wall south face — mirrors top wall, lights lower half of each room
-  // Corridor wall south face (lobby side, y=458 = bottom edge of wall) — lights lobby from above
-  // Bottom wall — lights lobby from below, flanking the entry gap (x:430–570), spacing 350
-  // Entry area — left perimeter wall
-  // Room F — right perimeter wall
+// Lamp placement gives each room at least one fixture. Range/falloff, not spacing alone,
+// now controls whether intact rooms are broadly lit or leave exploitable dark gaps.
 
-// Wall duct/window exits — manually activated bonus exfil points
+// Wall duct/window exits - manually activated bonus exfil points
 const WALL_GAP_EXITS = [
   { x:    9, y: 190, roomId: 'room_a',  activated: false }, // left perimeter duct, Room A
   { x: 1091, y: 190, roomId: 'room_bc', activated: false }, // right perimeter duct, Room B/C
@@ -417,7 +417,7 @@ function computeVisibilityPolygon(px, py, playerAngle, visionAngle = VISION_ANGL
   const half    = visionAngle / 2;
   const eps     = 0.0001;
 
-  // Cone boundary rays + one ray per visible wall corner (±ε for clean edges)
+  // Cone boundary rays plus one ray per visible wall corner for clean edges.
   const angles = [forward - half, forward + half];
   for (const c of WALL_CORNERS) {
     const a = Math.atan2(c.y - py, c.x - px);
@@ -425,7 +425,7 @@ function computeVisibilityPolygon(px, py, playerAngle, visionAngle = VISION_ANGL
     while (diff >  Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     if (Math.abs(diff) <= half + eps) {
-      const na = forward + diff; // unwrap to same range as boundary angles — fixes sort near ±π
+      const na = forward + diff; // unwrap to the same range as boundary angles
       angles.push(na - eps, na, na + eps);
     }
   }
@@ -460,7 +460,7 @@ function drawFog() {
 
   fogCtx.globalCompositeOperation = 'destination-out';
 
-  // Wall-occluded visibility polygon — rays stop at wall surfaces
+  // Wall-occluded visibility polygon; rays stop at wall surfaces.
   const visPts = computeVisibilityPolygon(player.x, player.y, player.angle);
   if (visPts.length >= 2) {
     fogCtx.beginPath();
@@ -470,7 +470,7 @@ function drawFog() {
     fogCtx.fill();
   }
 
-  // Proximity circle — always visible regardless of facing direction
+  // Proximity circle is always visible regardless of facing direction.
   fogCtx.beginPath();
   fogCtx.arc(player.x, player.y, PROXIMITY_RADIUS, 0, Math.PI * 2);
   fogCtx.fill();

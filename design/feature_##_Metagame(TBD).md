@@ -1,4 +1,4 @@
-# Feature 09 — Metagame & Daytime Systems (TBD)
+# Feature ## - Metagame & Daytime Systems (TBD)
 
 **Status: CONCEPTUAL** — daytime systems are deferred until the night-phase prototype is fully validated. This document captures design intent and already-implemented hooks to avoid losing context between sessions.
 

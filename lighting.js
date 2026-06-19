@@ -6,8 +6,13 @@ const ENEMY_BRIGHT_LIGHT_THRESHOLD = 0.35;
 let lightingGlobalAmbient = LIGHT_GLOBAL_AMBIENT;
 let lightingLamps = [];
 let lightingZones = [];
+let lightingApertures = [];
 let lightCanvas = document.createElement('canvas');
 let lightCtx = lightCanvas.getContext('2d');
+const STATIC_LIGHT_RENDER_SCALE = 4;
+let staticLightCanvas = document.createElement('canvas');
+let staticLightCtx = staticLightCanvas.getContext('2d');
+let staticLightDirty = true;
 
 function clampLight(v) {
   return Math.max(0, Math.min(1, v));
@@ -38,6 +43,18 @@ function scaleLightingLamp(lamp) {
   return scaled;
 }
 
+function scaleLightingAperture(aperture) {
+  return {
+    ...scaleGamePoint(aperture),
+    width: scaleGameUnit(aperture.width ?? 40),
+    range: scaleGameUnit(aperture.range ?? 180),
+    intensity: aperture.intensity ?? 0.18,
+    falloffPower: aperture.falloffPower ?? 1.1,
+    spreadRadians: aperture.spreadRadians ?? Math.PI / 3,
+    open: aperture.open !== false,
+  };
+}
+
 function initLighting(missionLighting) {
   lightingGlobalAmbient = clampLight(missionLighting.globalAmbient ?? LIGHT_GLOBAL_AMBIENT);
   lightingZones = (missionLighting.zones ?? []).map(zone => ({
@@ -48,12 +65,18 @@ function initLighting(missionLighting) {
   for (const lamp of lightingLamps) {
     lamp.visibilityPolygon = computeLampVisibilityPolygon(lamp);
   }
+  lightingApertures = (missionLighting.apertures ?? []).map(scaleLightingAperture);
+  for (const aperture of lightingApertures) {
+    aperture.visibilityPolygon = computeApertureVisibilityPolygon(aperture);
+  }
+  staticLightDirty = true;
 }
 
 function resetLighting() {
   for (const lamp of lightingLamps) {
     lamp.active = lamp.defaultActive;
   }
+  staticLightDirty = true;
 }
 
 function getLampOffset(lamp) {
@@ -80,6 +103,20 @@ function pointInPolygon(points, wx, wy) {
     if (intersects) inside = !inside;
   }
   return inside;
+}
+
+function getDirectionVector(direction) {
+  if (direction === 'N') return { x: 0, y: -1, angle: -Math.PI / 2 };
+  if (direction === 'S') return { x: 0, y: 1, angle: Math.PI / 2 };
+  if (direction === 'W') return { x: -1, y: 0, angle: Math.PI };
+  return { x: 1, y: 0, angle: 0 };
+}
+
+function angleDiff(a, b) {
+  let diff = a - b;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return diff;
 }
 
 function castLampRay(lamp, angle) {
@@ -120,6 +157,47 @@ function computeLampVisibilityPolygon(lamp) {
   return rays;
 }
 
+function castApertureRay(aperture, angle) {
+  const hit = castVisRay(aperture.x, aperture.y, angle);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  if (!hit) {
+    return { x: aperture.x + dx * aperture.range, y: aperture.y + dy * aperture.range };
+  }
+
+  const hitDist = Math.hypot(hit.x - aperture.x, hit.y - aperture.y);
+  const dist = Math.min(hitDist, aperture.range);
+  return { x: aperture.x + dx * dist, y: aperture.y + dy * dist };
+}
+
+function computeApertureVisibilityPolygon(aperture) {
+  const eps = 0.0001;
+  const dir = getDirectionVector(aperture.direction);
+  const half = aperture.spreadRadians / 2;
+  const angles = [dir.angle - half, dir.angle + half];
+
+  for (const corner of WALL_CORNERS) {
+    const angle = Math.atan2(corner.y - aperture.y, corner.x - aperture.x);
+    if (Math.abs(angleDiff(angle, dir.angle)) <= half + eps) {
+      angles.push(angle - eps, angle, angle + eps);
+    }
+  }
+
+  for (let i = 0; i <= 24; i++) {
+    angles.push(dir.angle - half + (aperture.spreadRadians * i) / 24);
+  }
+
+  const rays = [];
+  for (const angle of angles) {
+    if (Math.abs(angleDiff(angle, dir.angle)) > half + eps) continue;
+    const p = castApertureRay(aperture, angle);
+    rays.push({ ...p, angle: angleDiff(angle, dir.angle) });
+  }
+
+  rays.sort((a, b) => a.angle - b.angle);
+  return [{ x: aperture.x, y: aperture.y }, ...rays];
+}
+
 function getLampContribution(lamp, wx, wy) {
   if (!lamp.active || !pointInLampHalfPlane(lamp, wx, wy)) return 0;
   if (!lamp.visibilityPolygon || !pointInPolygon(lamp.visibilityPolygon, wx, wy)) return 0;
@@ -132,6 +210,28 @@ function getLampContribution(lamp, wx, wy) {
   const t = dist / lamp.radius;
   const falloff = Math.pow(1 - t, lamp.falloffPower);
   return clampLight(lamp.intensity * falloff);
+}
+
+function getApertureContribution(aperture, wx, wy) {
+  if (!aperture.open) return 0;
+  if (!aperture.visibilityPolygon || !pointInPolygon(aperture.visibilityPolygon, wx, wy)) return 0;
+
+  const dir = getDirectionVector(aperture.direction);
+  const vx = wx - aperture.x;
+  const vy = wy - aperture.y;
+  const forward = vx * dir.x + vy * dir.y;
+  if (forward < 0 || forward > aperture.range) return 0;
+
+  const lateral = Math.abs(vx * -dir.y + vy * dir.x);
+  const spreadWidth = Math.tan(aperture.spreadRadians / 2) * forward;
+  const maxLateral = aperture.width / 2 + spreadWidth;
+  if (lateral > maxLateral) return 0;
+
+  const t = forward / aperture.range;
+  const falloff = Math.pow(1 - t, aperture.falloffPower);
+  const edgeFade = 1 - lateral / maxLateral;
+  const lateralFalloff = edgeFade * edgeFade * (3 - 2 * edgeFade);
+  return clampLight(aperture.intensity * falloff * lateralFalloff);
 }
 
 function getPlayerGlowContribution(wx, wy) {
@@ -156,6 +256,16 @@ function getZoneAmbient(wx, wy) {
 }
 
 function getLightLevel(wx, wy, options = {}) {
+  let light = getStaticLightLevel(wx, wy);
+
+  if (options.includePlayerGlow === true) {
+    light = Math.max(light, getPlayerGlowContribution(wx, wy));
+  }
+
+  return clampLight(light);
+}
+
+function getStaticLightLevel(wx, wy) {
   let light = lightingGlobalAmbient;
   light = Math.max(light, getZoneAmbient(wx, wy));
 
@@ -163,8 +273,8 @@ function getLightLevel(wx, wy, options = {}) {
     light = Math.max(light, getLampContribution(lamp, wx, wy));
   }
 
-  if (options.includePlayerGlow === true) {
-    light = Math.max(light, getPlayerGlowContribution(wx, wy));
+  for (const aperture of lightingApertures) {
+    light = Math.max(light, getApertureContribution(aperture, wx, wy));
   }
 
   return clampLight(light);
@@ -182,10 +292,11 @@ function hitLampAt(wx, wy) {
   const hitRadius = scaleGameUnit(10);
   for (const lamp of lightingLamps) {
     if (!lamp.active) continue;
-    const dx = wx - lamp.x;
-    const dy = wy - lamp.y;
+    const dx = wx - lamp.lightX;
+    const dy = wy - lamp.lightY;
     if (dx * dx + dy * dy <= hitRadius * hitRadius) {
       lamp.active = false;
+      staticLightDirty = true;
       return true;
     }
   }
@@ -244,6 +355,38 @@ function drawLampLight(lamp) {
   lightCtx.restore();
 }
 
+function drawApertureLight(aperture) {
+  if (!aperture.open || !aperture.visibilityPolygon || aperture.visibilityPolygon.length < 3) return;
+
+  const dir = getDirectionVector(aperture.direction);
+
+  lightCtx.save();
+  lightCtx.beginPath();
+  lightCtx.moveTo(aperture.visibilityPolygon[0].x, aperture.visibilityPolygon[0].y);
+  for (let i = 1; i < aperture.visibilityPolygon.length; i++) {
+    lightCtx.lineTo(aperture.visibilityPolygon[i].x, aperture.visibilityPolygon[i].y);
+  }
+  lightCtx.closePath();
+  lightCtx.clip();
+
+  const endX = aperture.x + dir.x * aperture.range;
+  const endY = aperture.y + dir.y * aperture.range;
+  const intensity = clampLight(aperture.intensity);
+  const falloffAt = (t) => intensity * Math.pow(1 - t, aperture.falloffPower);
+  const grad = lightCtx.createLinearGradient(aperture.x, aperture.y, endX, endY);
+  grad.addColorStop(0, `rgba(255,255,255,${falloffAt(0)})`);
+  grad.addColorStop(0.5, `rgba(255,255,255,${falloffAt(0.5)})`);
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  lightCtx.fillStyle = grad;
+  lightCtx.fillRect(
+    Math.min(aperture.x, endX) - aperture.range,
+    Math.min(aperture.y, endY) - aperture.range,
+    aperture.range * 2 + Math.abs(endX - aperture.x),
+    aperture.range * 2 + Math.abs(endY - aperture.y)
+  );
+  lightCtx.restore();
+}
+
 function drawPlayerGlow() {
   const pg = lightCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, PLAYER_GLOW_RADIUS);
   pg.addColorStop(0, 'rgba(255,255,255,1)');
@@ -255,11 +398,38 @@ function drawPlayerGlow() {
   lightCtx.fill();
 }
 
+function renderStaticLightCanvas() {
+  const w = Math.ceil(GAME_WIDTH / STATIC_LIGHT_RENDER_SCALE);
+  const h = Math.ceil(GAME_HEIGHT / STATIC_LIGHT_RENDER_SCALE);
+  if (staticLightCanvas.width !== w || staticLightCanvas.height !== h) {
+    staticLightCanvas.width = w;
+    staticLightCanvas.height = h;
+  }
+
+  const image = staticLightCtx.createImageData(w, h);
+  const data = image.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const wx = Math.min(GAME_WIDTH, (x + 0.5) * STATIC_LIGHT_RENDER_SCALE);
+      const wy = Math.min(GAME_HEIGHT, (y + 0.5) * STATIC_LIGHT_RENDER_SCALE);
+      const light = getStaticLightLevel(wx, wy);
+      const alpha = Math.round((1 - light) * 255);
+      const i = (y * w + x) * 4;
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+      data[i + 3] = alpha;
+    }
+  }
+  staticLightCtx.putImageData(image, 0, 0);
+  staticLightDirty = false;
+}
+
 function drawLamps() {
   for (const lamp of lightingLamps) {
     ctx.fillStyle = lamp.active ? lamp.color : '#444';
     ctx.beginPath();
-    ctx.arc(lamp.x, lamp.y, scaleGameUnit(8), 0, Math.PI * 2);
+    ctx.arc(lamp.lightX, lamp.lightY, scaleGameUnit(6), 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -270,13 +440,13 @@ function drawLighting() {
     lightCanvas.height = GAME_HEIGHT;
   }
 
+  if (staticLightDirty) renderStaticLightCanvas();
+
   lightCtx.clearRect(0, 0, lightCanvas.width, lightCanvas.height);
-  lightCtx.fillStyle = `rgba(0,0,0,${1 - lightingGlobalAmbient})`;
-  lightCtx.fillRect(0, 0, lightCanvas.width, lightCanvas.height);
+  lightCtx.imageSmoothingEnabled = true;
+  lightCtx.drawImage(staticLightCanvas, 0, 0, GAME_WIDTH, GAME_HEIGHT);
 
   lightCtx.globalCompositeOperation = 'destination-out';
-  drawAmbientZones();
-  for (const lamp of lightingLamps) drawLampLight(lamp);
   drawPlayerGlow();
   lightCtx.globalCompositeOperation = 'source-over';
 

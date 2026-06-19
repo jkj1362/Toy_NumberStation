@@ -77,7 +77,10 @@ const missionLighting = {
     { id: 'entry_dim_spill', x: 430, y: 620, w: 140, h: 112, ambient: 0.08 },
   ],
   lamps: [
-    { x: 200, y: 18, wallSide: 'N', radius: 280, intensity: 1.0, falloffPower: 0.9, color: '#ffdc96', active: true },
+    { x: 200, y: 18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+  ],
+  apertures: [
+    { id: 'room_a_west_window_moonlight', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, color: '#9bb7d9', open: true },
   ],
 };
 ```
@@ -119,6 +122,42 @@ while falloff controls how quickly brightness decays from the source. In the def
 room lamps should broadly brighten their room; stealth gaps should come from broken lamps,
 corners, occluding geometry, and authored spill/ambient differences.
 
+### Aperture Fields
+
+Apertures are intentional openings that allow weaker, shaped light to enter an otherwise
+wall-blocked lighting model. Use them for windows, open doors, ducts, and narrow doorway
+spill. They are not full-strength lamps.
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Debug/readability label |
+| `x`, `y` | Aperture center in mission design-space coordinates |
+| `direction` | `N`, `S`, `E`, or `W`; direction light projects into the playable space |
+| `width` | Opening width along the wall |
+| `range` | Maximum aperture light reach |
+| `intensity` | Peak contribution near the opening; should usually be dimmer than lamps |
+| `falloffPower` | Distance fade curve |
+| `color` | Render tint; moonlight should be colder than lamp light |
+| `open` | Whether the aperture currently transmits light |
+| `kind` | Optional label such as `window`, `door`, or `duct` |
+| `spreadRadians` | Optional beam widening angle; defaults can be chosen by `lighting.js` |
+
+Window apertures are normally always open and represent weak exterior moonlight entering
+through the existing exterior wall gaps. They should create dim visibility, not full bright
+lamp visibility.
+
+Door apertures are dynamic:
+
+```text
+closed door = blocker exists, aperture closed, light does not pass
+open door   = blocker removed, aperture open, light can pass/spill through
+```
+
+The current implementation only enables exterior window apertures. Feature 09 owns the door
+system that will turn door state into dynamic blockers and dynamic apertures. Until those
+interactable doors exist as real blockers/openings, doorway artifacts should be softened with
+small local ambient threshold zones rather than fake directional door beams.
+
 ---
 
 ## Public Lighting API
@@ -156,11 +195,15 @@ Required behavior:
   inside the lamp's geometry visibility polygon, and within the lamp's max range.
 - Apply distance falloff from the fixture origin so brightness is strongest near the light
   source and weaker near the range edge.
+- Add open aperture contribution only when the point is inside the aperture projection shape,
+  inside the aperture's geometry visibility polygon, and within the aperture's max range.
 - Include the player's self-glow only when `options.includePlayerGlow === true`.
 - Clamp final value to `0.0..1.0`.
 
-Use max-composition for ambient and lamp contributions rather than summing everything
-unbounded. This keeps multiple nearby lamps from blowing out the whole room.
+Use max-composition for ambient, aperture, lamp, and player-glow contributions rather than
+summing everything unbounded. This keeps multiple nearby sources from creating artificial
+overlap-hotspots. Rendering must follow the same max-composition rule as `getLightLevel()`;
+do not layer light cutouts with additive or repeated `destination-out` composition.
 
 ### Compatibility Helpers
 
@@ -214,13 +257,16 @@ true black where no authored light source applies:
 3. Apply ambient zones as broad rectangular/softened reductions in darkness.
 4. Apply active lamp radial gradients clipped to the lamp's geometry visibility polygon,
    wall-side half-plane, and max range.
-5. Apply player self-glow as a small local reduction in darkness.
-6. Draw the resulting darkness layer over the world.
+5. Apply open aperture gradients for windows/doorway spill. These are weaker than lamps and
+   also geometry-clipped so they do not pass through solid walls.
+6. Apply player self-glow as a small local reduction in darkness.
+7. Draw the resulting darkness layer over the world.
 
 Rendering and gameplay sampling must use the same conceptual values: geometry blocking,
-distance falloff, max range, and authored spill zones. Exact pixel gradients do not need to be
-sampled from the canvas, but `getLightLevel()` and `drawLighting()` must share the same source
-data and falloff assumptions.
+distance falloff, max range, authored spill zones, aperture state, and max-composition.
+The current renderer may sample a cached low-resolution static darkness map from
+`getLightLevel()`/static light helpers, then apply the dynamic player glow on top. This avoids
+visual overlap artifacts while keeping per-frame rendering practical.
 
 Current draw order remains:
 
@@ -270,13 +316,16 @@ This avoids exposing lamp runtime storage as a mission-specific global.
 3. Change lighting storage from hardcoded `LAMPS` to runtime state initialized by
    `initLighting(missionLighting)`.
 4. Add `getLightLevel(wx, wy, options)` with global ambient, zone ambient, geometry-blocked
-   lamp falloff, max range, and optional player glow.
+   lamp falloff, aperture falloff, max range, and optional player glow.
 5. Keep `isLit()` and `isLitByLamps()` wrappers so existing pickup/exfil/enemy code continues
    working during the first migration.
 6. Replace direct lamp reset/mutation in `game.js` with `resetLighting()` and `hitLampAt()`.
 7. Update enemy sight only as far as needed for compatibility in this pass. Rich dim-light
    suspicion behavior can follow after the lighting model is stable.
-8. Perform a visual screenshot check after implementation. The expected visual is true dark
+8. Add aperture data for exterior windows and current always-open doorplaces. Later, when
+   doors become interactive, closed doors must contribute blocker segments and set their
+   aperture `open` state to false.
+9. Perform a visual screenshot check after implementation. The expected visual is true dark
    zones where soundwaves matter, authored dim spill/readability near plausible sources, and
    direct lamp light that travels through open space but stops cleanly at walls.
 
@@ -290,6 +339,12 @@ This avoids exposing lamp runtime storage as a mission-specific global.
   readability only where intended.
 - Lamps still create stronger local pools, fade with distance, stop at walls, respect max
   range, and can still be shot out.
+- Multiple light sources merge by maximum light level instead of visually stacking brighter
+  overlap layers.
+- Windows leak weak moonlight into the building without making exterior light as strong as
+  lamps.
+- Current open thresholds can use small local ambient spill zones to avoid harsh seams.
+  Closed/open interactive doors should later drive aperture `open` state and blocker segments.
 - Existing pickup/exfil visibility and enemy sight continue to function through compatibility
   helpers.
 - `getLightLevel()` provides a stable base for future hard-aim and dim-light enemy detection.
@@ -305,5 +360,5 @@ This avoids exposing lamp runtime storage as a mission-specific global.
 | Dedicated mission files | Deferred. The API should support them, but data may remain near `game.js` for the first migration. |
 | Irregular ambient zones | Deferred. Rectangular zones are enough for the prototype. |
 | Full dim-light suspicion rules | Deferred until after the light-level API is in place. |
-| Windows/transparent wall openings | Deferred. Walls remain solid for this prototype. |
+| Interactable doors | Deferred. Aperture data supports open/closed light state, but door collision/pathing/rendering belongs to a door feature. |
 | Standalone lamps | Deferred. Wall lamps remain the first supported source type. |

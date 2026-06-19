@@ -30,6 +30,8 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | Enemy sight and light-gated LOS detection | Done |
 | Enemy sound detection and suspicion behavior | Done |
 | Enemy patrol, alert pursuit, search, and cautious behavior | Done |
+| Walk/run movement noise tradeoff | Done |
+| Follow camera and hard-aim scouting | Done |
 | Fixed FHD internal gameplay resolution and presentation canvas | Done |
 
 ## Feature Build Order
@@ -43,8 +45,9 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | 5 | **Enemy Sound Detection** | Done. Gunshots, footsteps, suspicion, direct observation |
 | 6 | **Enemy Movement & Patrol** | Done. Waypoint patrol routes, including cross-room patrol |
 | 7 | **Enemy AI State Machine** | Done. Alert pursuit, last-known search, and lingering cautious behavior |
-| 8 | **Walk vs. Run + Noise Tradeoff** | Next. Shift/run speed and louder movement |
-| 9 | **Follow Camera & Hard-Aim Scouting** | Player-centered camera; LT hard-aim look-ahead. Depends on Feature 8 (walk-slow) |
+| 8 | **Walk vs. Run + Noise Tradeoff** | Done. Shift/run speed, walk-slow, and movement noise tradeoff |
+| 9 | **Door System** | Next. Closed doors block movement/light; open doors create passable light apertures; doors have HP |
+| 10 | **Follow Camera & Hard-Aim Scouting** | Done. Player-centered camera; LT hard-aim look-ahead |
 | ## | **Metagame & Daytime Systems** | Conceptual. Deferred until night-phase prototype is validated |
 
 ## Key Design Decisions
@@ -55,4 +58,4 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | Objective type | Physical pickup, then exfil |
 | Enemy movement | Patrol waypoints |
 | Enemy AI consequence | State changes and pursuit for now; no full game-over flow yet |
-| Presentation target | Fixed 1920x1080 internal world and screen canvas; CSS scales that FHD frame to the monitor |
+| Presentation target | Fixed 1920x1080 screen canvas; current test world is 3200x1800 and camera-followed |
