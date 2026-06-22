@@ -99,7 +99,7 @@ The most important section for the incoming session. Include:
 - What still needs to be done, broken into concrete sub-tasks
 - Any new data model fields that need to be added to `resetEnemies()` or equivalent
 - Relevant code snippets showing the approach (pseudocode is fine)
-- Reference to the design doc for full detail: `design/feature_XX_name.md`
+- Reference to the planning doc for full detail: `Operation guide/Feature planning/feature_XX_name.md`
 
 ### Section 7 — Gap / Navigation Coordinates
 

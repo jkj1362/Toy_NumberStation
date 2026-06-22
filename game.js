@@ -55,6 +55,51 @@ const WALLS = [
   { x:  900, y: 640, w:  18, h:  92 },
 ].map(scaleGameRect);
 
+const DOOR_SPECS = [
+  {
+    id: 'corridor_left_door',
+    x: 220, y: 440, w: 100, h: 18,
+    orientation: 'horizontal',
+    apertureIds: ['corridor_left_door_n', 'corridor_left_door_s'],
+  },
+  {
+    id: 'corridor_right_door',
+    x: 778, y: 440, w: 82, h: 18,
+    orientation: 'horizontal',
+    apertureIds: ['corridor_right_door_n', 'corridor_right_door_s'],
+  },
+  {
+    id: 'room_a_east_door',
+    x: 400, y: 250, w: 18, h: 90,
+    orientation: 'vertical',
+    apertureIds: ['room_a_east_door_e', 'room_a_east_door_w'],
+  },
+  {
+    id: 'room_bc_divider_door',
+    x: 760, y: 160, w: 18, h: 100,
+    orientation: 'vertical',
+    apertureIds: ['room_bc_divider_door_e', 'room_bc_divider_door_w'],
+  },
+  {
+    id: 'room_f_west_door',
+    x: 900, y: 540, w: 18, h: 100,
+    orientation: 'vertical',
+    apertureIds: ['room_f_west_door_e', 'room_f_west_door_w'],
+  },
+];
+
+const DOORS = DOOR_SPECS.map((door) => ({
+  ...scaleGameRect(door),
+  id: door.id,
+  orientation: door.orientation,
+  state: 'closed',
+  defaultState: 'closed',
+  hp: 60,
+  maxHp: 60,
+  soundTransmission: 0.75,
+  apertureIds: door.apertureIds,
+}));
+
 const projectiles = [];
 
 const CAM_SOFT_LOOKAHEAD_DIST = Math.min(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) * 0.10;
@@ -64,6 +109,11 @@ const CAM_EASE = 0.18;
 const CAM_LOOKAHEAD_EASE = 0.16;
 const CAMERA_MAX_X = Math.max(0, GAME_WIDTH - VIEWPORT_WIDTH);
 const CAMERA_MAX_Y = Math.max(0, GAME_HEIGHT - VIEWPORT_HEIGHT);
+const SIM_STEP_MS = 1000 / 60;
+const MAX_SIM_STEPS_PER_FRAME = 5;
+const FOG_RENDER_SCALE = 2;
+const SHOW_PERF_OVERLAY = true;
+const PERF_SMOOTHING = 0.08;
 
 const camera = {
   x: 0,
@@ -71,6 +121,28 @@ const camera = {
   lookAheadX: 0,
   lookAheadY: 0,
 };
+
+const perf = {
+  fps: 0,
+  updateMs: 0,
+  drawMs: 0,
+  enemiesMs: 0,
+  lightingMs: 0,
+  fogMs: 0,
+  staticLightMs: 0,
+  simSteps: 0,
+};
+
+function recordPerf(key, value) {
+  perf[key] = perf[key] === 0 ? value : perf[key] * (1 - PERF_SMOOTHING) + value * PERF_SMOOTHING;
+}
+
+function measurePerf(key, fn) {
+  const start = performance.now();
+  const result = fn();
+  recordPerf(key, performance.now() - start);
+  return result;
+}
 
 
 const MISSION_LIGHTING = {
@@ -98,6 +170,16 @@ const MISSION_LIGHTING = {
   apertures: [
     { id: 'room_a_west_window_moonlight', kind: 'window', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
     { id: 'room_bc_east_window_moonlight', kind: 'window', x: 1082, y: 190, direction: 'W', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
+    { id: 'corridor_left_door_n', kind: 'door', x: 270, y: 440, direction: 'N', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'corridor_left_door_s', kind: 'door', x: 270, y: 458, direction: 'S', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'corridor_right_door_n', kind: 'door', x: 819, y: 440, direction: 'N', width: 82, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'corridor_right_door_s', kind: 'door', x: 819, y: 458, direction: 'S', width: 82, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'room_a_east_door_e', kind: 'door', x: 418, y: 295, direction: 'E', width: 90, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'room_a_east_door_w', kind: 'door', x: 400, y: 295, direction: 'W', width: 90, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'room_bc_divider_door_e', kind: 'door', x: 778, y: 210, direction: 'E', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'room_bc_divider_door_w', kind: 'door', x: 760, y: 210, direction: 'W', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'room_f_west_door_e', kind: 'door', x: 918, y: 590, direction: 'E', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'room_f_west_door_w', kind: 'door', x: 900, y: 590, direction: 'W', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
   ],
 };
 
@@ -113,9 +195,67 @@ let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
 const INTERACT_RADIUS = scaleGameUnit(30);
 const EXFIL_RADIUS    = scaleGameUnit(40);
+const DOOR_INTERACT_RADIUS = scaleGameUnit(45);
+const DOOR_DAMAGE = 20;
+const DOOR_OPEN_ANGLE = Math.PI * 5 / 12; // 75 degrees
+
+function getClosedDoorRects() {
+  return DOORS.filter(door => door.state === 'closed');
+}
+
+function getMovementBlockers() {
+  return WALLS.concat(getClosedDoorRects());
+}
+
+function getRayBlockerRects() {
+  return getMovementBlockers();
+}
+
+function rotateDoorPoint(x, y, angle) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos,
+  };
+}
+
+function getOpenDoorPanelCorners(door) {
+  if (door.orientation === 'horizontal') {
+    const hingeX = door.x;
+    const hingeY = door.y + door.h / 2;
+    return [
+      { x: 0, y: -door.h / 2 },
+      { x: door.w, y: -door.h / 2 },
+      { x: door.w, y: door.h / 2 },
+      { x: 0, y: door.h / 2 },
+    ].map((p) => {
+      const rotated = rotateDoorPoint(p.x, p.y, -DOOR_OPEN_ANGLE);
+      return { x: hingeX + rotated.x, y: hingeY + rotated.y };
+    });
+  }
+
+  const hingeX = door.x + door.w / 2;
+  const hingeY = door.y;
+  return [
+    { x: -door.w / 2, y: 0 },
+    { x: door.w / 2, y: 0 },
+    { x: door.w / 2, y: door.h },
+    { x: -door.w / 2, y: door.h },
+  ].map((p) => {
+    const rotated = rotateDoorPoint(p.x, p.y, DOOR_OPEN_ANGLE);
+    return { x: hingeX + rotated.x, y: hingeY + rotated.y };
+  });
+}
+
+function getRayBlockerPolygons() {
+  return DOORS
+    .filter(door => door.state === 'open')
+    .map(getOpenDoorPanelCorners);
+}
 
 // Precomputed wall segments and corners for visibility raycasting (static — walls never move)
-const WALL_SEGMENTS = (() => {
+let WALL_SEGMENTS = (() => {
   const s = [
     { x1: 0,          y1: 0,           x2: GAME_WIDTH, y2: 0           },
     { x1: GAME_WIDTH, y1: 0,           x2: GAME_WIDTH, y2: GAME_HEIGHT },
@@ -131,7 +271,7 @@ const WALL_SEGMENTS = (() => {
   return s;
 })();
 
-const WALL_CORNERS = (() => {
+let WALL_CORNERS = (() => {
   const seen = new Set(), pts = [];
   const add = (x, y) => { const k = `${x},${y}`; if (!seen.has(k)) { seen.add(k); pts.push({ x, y }); } };
   add(0, 0); add(GAME_WIDTH, 0); add(GAME_WIDTH, GAME_HEIGHT); add(0, GAME_HEIGHT);
@@ -140,6 +280,64 @@ const WALL_CORNERS = (() => {
   }
   return pts;
 })();
+
+let rayGeometryDirty = true;
+
+function markGeometryDirty() {
+  rayGeometryDirty = true;
+}
+
+function markDoorLightingDirty() {
+  if (typeof markStaticLightingDirty === 'function') markStaticLightingDirty();
+}
+
+function rebuildRayGeometryIfNeeded() {
+  if (!rayGeometryDirty) return;
+
+  const segments = [
+    { x1: 0,          y1: 0,           x2: GAME_WIDTH, y2: 0           },
+    { x1: GAME_WIDTH, y1: 0,           x2: GAME_WIDTH, y2: GAME_HEIGHT },
+    { x1: GAME_WIDTH, y1: GAME_HEIGHT, x2: 0,          y2: GAME_HEIGHT },
+    { x1: 0,          y1: GAME_HEIGHT, x2: 0,          y2: 0           },
+  ];
+  const seen = new Set();
+  const corners = [];
+  const addCorner = (x, y) => {
+    const key = `${x},${y}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    corners.push({ x, y });
+  };
+
+  addCorner(0, 0);
+  addCorner(GAME_WIDTH, 0);
+  addCorner(GAME_WIDTH, GAME_HEIGHT);
+  addCorner(0, GAME_HEIGHT);
+
+  for (const r of getRayBlockerRects()) {
+    segments.push({ x1: r.x,       y1: r.y,       x2: r.x + r.w, y2: r.y       });
+    segments.push({ x1: r.x + r.w, y1: r.y,       x2: r.x + r.w, y2: r.y + r.h });
+    segments.push({ x1: r.x + r.w, y1: r.y + r.h, x2: r.x,       y2: r.y + r.h });
+    segments.push({ x1: r.x,       y1: r.y + r.h, x2: r.x,       y2: r.y       });
+    addCorner(r.x, r.y);
+    addCorner(r.x + r.w, r.y);
+    addCorner(r.x + r.w, r.y + r.h);
+    addCorner(r.x, r.y + r.h);
+  }
+
+  for (const poly of getRayBlockerPolygons()) {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      addCorner(a.x, a.y);
+    }
+  }
+
+  WALL_SEGMENTS = segments;
+  WALL_CORNERS = corners;
+  rayGeometryDirty = false;
+}
 
 // Room centers used for random pickup / exfil placement
 const ROOMS = [
@@ -155,6 +353,144 @@ let pickup          = { x: 0, y: 0, roomId: '', collected: false, visibleToPlaye
 let exfilPoints     = [];
 let gamePhase       = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete'
 let hasMapKnowledge = true;         // true = player acquired facility map during day phase
+
+function setDoorApertures(door) {
+  const open = door.state === 'open' || door.state === 'destroyed';
+  if (typeof setLightingAperturesOpen === 'function') {
+    setLightingAperturesOpen(door.apertureIds, open);
+  }
+}
+
+function setDoorState(door, state) {
+  if (door.state === state) return;
+  door.state = state;
+  setDoorApertures(door);
+  markGeometryDirty();
+  markDoorLightingDirty();
+}
+
+function resetDoors() {
+  for (const door of DOORS) {
+    door.state = door.defaultState;
+    door.hp = door.maxHp;
+    setDoorApertures(door);
+  }
+  markGeometryDirty();
+  markDoorLightingDirty();
+}
+
+function closestPointOnRect(rect, x, y) {
+  return {
+    x: clamp(x, rect.x, rect.x + rect.w),
+    y: clamp(y, rect.y, rect.y + rect.h),
+  };
+}
+
+function distanceSqToRect(rect, x, y) {
+  const p = closestPointOnRect(rect, x, y);
+  return (x - p.x) ** 2 + (y - p.y) ** 2;
+}
+
+function distanceSqToSegment(px, py, ax, ay, bx, by) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const len2 = abx * abx + aby * aby;
+  if (len2 === 0) return (px - ax) ** 2 + (py - ay) ** 2;
+  const t = clamp(((px - ax) * abx + (py - ay) * aby) / len2, 0, 1);
+  const cx = ax + abx * t;
+  const cy = ay + aby * t;
+  return (px - cx) ** 2 + (py - cy) ** 2;
+}
+
+function pointInDoorPolygon(poly, x, y) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (((a.y > y) !== (b.y > y)) &&
+        x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function distanceSqToPolygon(poly, x, y) {
+  if (pointInDoorPolygon(poly, x, y)) return 0;
+  let best = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    best = Math.min(best, distanceSqToSegment(x, y, a.x, a.y, b.x, b.y));
+  }
+  return best;
+}
+
+function isDoorBlockedByEnemy(door) {
+  if (typeof enemies === 'undefined') return false;
+  const panel = getOpenDoorPanelCorners(door);
+  const radius = typeof ENEMY_RADIUS === 'number' ? ENEMY_RADIUS : scaleGameUnit(16);
+  const radiusSq = radius * radius;
+  for (const enemy of enemies) {
+    if (distanceSqToRect(door, enemy.x, enemy.y) <= radiusSq) return true;
+    if (distanceSqToPolygon(panel, enemy.x, enemy.y) <= radiusSq) return true;
+  }
+  return false;
+}
+
+function getNearbyDoor(entity, radius = DOOR_INTERACT_RADIUS) {
+  let best = null;
+  let bestD2 = radius * radius;
+  for (const door of DOORS) {
+    if (door.state === 'destroyed') continue;
+    const d2 = distanceSqToRect(door, entity.x, entity.y);
+    if (d2 <= bestD2) {
+      best = door;
+      bestD2 = d2;
+    }
+  }
+  return best;
+}
+
+function toggleNearbyDoor(entity = player) {
+  const door = getNearbyDoor(entity);
+  if (!door) return false;
+  if (isDoorBlockedByEnemy(door)) return true;
+  setDoorState(door, door.state === 'closed' ? 'open' : 'closed');
+  if (typeof emitSound === 'function') emitSound(entity.x, entity.y, scaleGameUnit(120), false);
+  return true;
+}
+
+function openDoorNearEntity(entity, radius = DOOR_INTERACT_RADIUS) {
+  const door = getNearbyDoor(entity, radius);
+  if (!door || door.state !== 'closed') return false;
+  setDoorState(door, 'open');
+  return true;
+}
+
+function hitDoorAt(x, y) {
+  for (const door of DOORS) {
+    if (door.state !== 'closed') continue;
+    if (x >= door.x && x <= door.x + door.w &&
+        y >= door.y && y <= door.y + door.h) return door;
+  }
+  return null;
+}
+
+function damageDoor(door, amount = DOOR_DAMAGE) {
+  if (!door || door.state !== 'closed') return false;
+  door.hp -= amount;
+  if (door.hp <= 0) {
+    door.hp = 0;
+    setDoorState(door, 'destroyed');
+    if (typeof emitSound === 'function') {
+      emitSound(door.x + door.w / 2, door.y + door.h / 2, scaleGameUnit(240), false);
+    }
+  } else {
+    markDoorLightingDirty();
+  }
+  return true;
+}
 
 function inVisionCone(wx, wy) {
   const dx = wx - player.x, dy = wy - player.y;
@@ -194,7 +530,7 @@ function initExfil() {
 }
 
 function pushOutOfWalls(entity, radius) {
-  for (const wall of WALLS) {
+  for (const wall of getMovementBlockers()) {
     const left   = wall.x - radius;
     const right  = wall.x + wall.w + radius;
     const top    = wall.y - radius;
@@ -214,7 +550,7 @@ function pushOutOfWalls(entity, radius) {
 }
 
 function hitsWall(x, y) {
-  for (const wall of WALLS) {
+  for (const wall of getRayBlockerRects()) {
     if (x >= wall.x && x <= wall.x + wall.w &&
         y >= wall.y && y <= wall.y + wall.h) return true;
   }
@@ -268,6 +604,7 @@ function reset() {
   projectiles.length = 0;
   resetEnemies();
   resetLighting();
+  resetDoors();
   gamePhase = 'infiltrate';
   gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
   initPickup();
@@ -290,13 +627,15 @@ function update() {
 
   // E key / button 2 (X face button) — interact
   const ePressed = (keys['e'] ?? false) || (gp?.buttons[2]?.pressed ?? false); // button 2 = X (face left)
+  const interactPressed = ePressed && !eWasPressed;
+  const doorInteractionHandled = interactPressed && toggleNearbyDoor(player);
 
   if (gamePhase === 'infiltrate' && !pickup.collected) {
     pickup.visibleToPlayer = inVisionCone(pickup.x, pickup.y) && isLit(pickup.x, pickup.y);
     for (const ef of exfilPoints) {
       if (!ef.discovered && inVisionCone(ef.x, ef.y) && isLit(ef.x, ef.y)) ef.discovered = true;
     }
-    if (ePressed && !eWasPressed) {
+    if (interactPressed && !doorInteractionHandled) {
       const dx = player.x - pickup.x, dy = player.y - pickup.y;
       if (dx * dx + dy * dy <= INTERACT_RADIUS * INTERACT_RADIUS) {
         pickup.collected = true;
@@ -311,7 +650,7 @@ function update() {
     if (gap.activated) continue;
     if (!inVisionCone(gap.x, gap.y) || !isLit(gap.x, gap.y)) continue;
     const gdx = player.x - gap.x, gdy = player.y - gap.y;
-    if (ePressed && !eWasPressed && gdx * gdx + gdy * gdy <= INTERACT_RADIUS * INTERACT_RADIUS) {
+    if (interactPressed && !doorInteractionHandled && gdx * gdx + gdy * gdy <= INTERACT_RADIUS * INTERACT_RADIUS) {
       gap.activated = true;
       exfilPoints.push({ x: gap.x, y: gap.y, type: 'gap', active: gamePhase === 'exfil', discovered: true });
     }
@@ -352,6 +691,10 @@ function update() {
     }
 
     if (!hit && hitLampAt(p.x, p.y)) hit = true;
+    if (!hit) {
+      const door = hitDoorAt(p.x, p.y);
+      if (door) hit = damageDoor(door);
+    }
 
     if (hit || hitsWall(p.x, p.y) || p.x < 0 || p.x > GAME_WIDTH || p.y < 0 || p.y > GAME_HEIGHT) {
       projectiles.splice(i, 1);
@@ -361,13 +704,69 @@ function update() {
 
 function drawFloor() {
   ctx.fillStyle = '#1e1e1e';
-  ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  ctx.fillRect(camera.x, camera.y, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 }
 
 function drawWalls() {
   ctx.fillStyle = '#4a4a4a';
   for (const wall of WALLS) {
     ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+  }
+}
+
+function drawDoors() {
+  for (const door of DOORS) {
+    ctx.save();
+    if (door.state === 'closed') {
+      ctx.fillStyle = '#2b2220';
+      ctx.fillRect(door.x, door.y, door.w, door.h);
+      ctx.strokeStyle = '#8a6a42';
+      ctx.lineWidth = scaleGameUnit(2);
+      ctx.strokeRect(door.x, door.y, door.w, door.h);
+
+      const hpRatio = door.hp / door.maxHp;
+      if (hpRatio < 1) {
+        ctx.fillStyle = 'rgba(255,224,102,0.75)';
+        if (door.orientation === 'horizontal') {
+          ctx.fillRect(door.x, door.y - scaleGameUnit(5), door.w * hpRatio, scaleGameUnit(3));
+        } else {
+          ctx.fillRect(door.x - scaleGameUnit(5), door.y + door.h * (1 - hpRatio), scaleGameUnit(3), door.h * hpRatio);
+        }
+      }
+    } else if (door.state === 'open') {
+      ctx.fillStyle = '#2b2220';
+      ctx.strokeStyle = '#8a6a42';
+      ctx.lineWidth = scaleGameUnit(2);
+      if (door.orientation === 'horizontal') {
+        const hingeX = door.x;
+        const hingeY = door.y + door.h / 2;
+        ctx.translate(hingeX, hingeY);
+        ctx.rotate(-DOOR_OPEN_ANGLE);
+        ctx.fillRect(0, -door.h / 2, door.w, door.h);
+        ctx.strokeRect(0, -door.h / 2, door.w, door.h);
+      } else {
+        const hingeX = door.x + door.w / 2;
+        const hingeY = door.y;
+        ctx.translate(hingeX, hingeY);
+        ctx.rotate(DOOR_OPEN_ANGLE);
+        ctx.fillRect(-door.w / 2, 0, door.w, door.h);
+        ctx.strokeRect(-door.w / 2, 0, door.w, door.h);
+      }
+    } else {
+      ctx.fillStyle = 'rgba(138,106,66,0.75)';
+      const pieces = door.orientation === 'horizontal' ? 4 : 5;
+      for (let i = 0; i < pieces; i++) {
+        const t = (i + 0.5) / pieces;
+        const x = door.orientation === 'horizontal'
+          ? door.x + door.w * t - scaleGameUnit(5)
+          : door.x + door.w / 2 - scaleGameUnit(5);
+        const y = door.orientation === 'horizontal'
+          ? door.y + door.h / 2 - scaleGameUnit(4)
+          : door.y + door.h * t - scaleGameUnit(4);
+        ctx.fillRect(x, y, scaleGameUnit(10), scaleGameUnit(8));
+      }
+    }
+    ctx.restore();
   }
 }
 
@@ -398,6 +797,7 @@ function drawProjectiles() {
 
 // Cast a single ray from (px,py) at canvas angle `angle`, return nearest wall hit
 function castVisRay(px, py, angle) {
+  rebuildRayGeometryIfNeeded();
   const dx = Math.cos(angle), dy = Math.sin(angle);
   let minT = Infinity;
   for (const s of WALL_SEGMENTS) {
@@ -413,6 +813,7 @@ function castVisRay(px, py, angle) {
 
 // Build a wall-occluded visibility polygon for the player's vision cone
 function computeVisibilityPolygon(px, py, playerAngle, visionAngle = VISION_ANGLE) {
+  rebuildRayGeometryIfNeeded();
   const forward = playerAngle - Math.PI / 2;
   const half    = visionAngle / 2;
   const eps     = 0.0001;
@@ -449,9 +850,11 @@ const fogCtx = fogCanvas.getContext('2d');
 function drawFog() {
   const PROXIMITY_RADIUS = PLAYER_PROXIMITY_RADIUS;
 
-  if (fogCanvas.width !== GAME_WIDTH || fogCanvas.height !== GAME_HEIGHT) {
-    fogCanvas.width = GAME_WIDTH;
-    fogCanvas.height = GAME_HEIGHT;
+  const fogWidth = Math.ceil(VIEWPORT_WIDTH / FOG_RENDER_SCALE);
+  const fogHeight = Math.ceil(VIEWPORT_HEIGHT / FOG_RENDER_SCALE);
+  if (fogCanvas.width !== fogWidth || fogCanvas.height !== fogHeight) {
+    fogCanvas.width = fogWidth;
+    fogCanvas.height = fogHeight;
   }
 
   fogCtx.clearRect(0, 0, fogCanvas.width, fogCanvas.height);
@@ -464,20 +867,28 @@ function drawFog() {
   const visPts = computeVisibilityPolygon(player.x, player.y, player.angle);
   if (visPts.length >= 2) {
     fogCtx.beginPath();
-    fogCtx.moveTo(player.x, player.y);
-    for (const p of visPts) fogCtx.lineTo(p.x, p.y);
+    fogCtx.moveTo((player.x - camera.x) / FOG_RENDER_SCALE, (player.y - camera.y) / FOG_RENDER_SCALE);
+    for (const p of visPts) {
+      fogCtx.lineTo((p.x - camera.x) / FOG_RENDER_SCALE, (p.y - camera.y) / FOG_RENDER_SCALE);
+    }
     fogCtx.closePath();
     fogCtx.fill();
   }
 
   // Proximity circle is always visible regardless of facing direction.
   fogCtx.beginPath();
-  fogCtx.arc(player.x, player.y, PROXIMITY_RADIUS, 0, Math.PI * 2);
+  fogCtx.arc(
+    (player.x - camera.x) / FOG_RENDER_SCALE,
+    (player.y - camera.y) / FOG_RENDER_SCALE,
+    PROXIMITY_RADIUS / FOG_RENDER_SCALE,
+    0,
+    Math.PI * 2
+  );
   fogCtx.fill();
 
   fogCtx.globalCompositeOperation = 'source-over';
 
-  ctx.drawImage(fogCanvas, 0, 0);
+  ctx.drawImage(fogCanvas, camera.x, camera.y, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 }
 
 function drawPickup() {
@@ -556,19 +967,46 @@ function drawExfilPoints() {
   }
 }
 
+function drawPerfOverlay() {
+  if (!SHOW_PERF_OVERLAY) return;
+
+  const lines = [
+    `FPS ${perf.fps.toFixed(1)} | steps ${perf.simSteps}`,
+    `update ${perf.updateMs.toFixed(2)} ms`,
+    `draw ${perf.drawMs.toFixed(2)} ms`,
+    `enemies ${perf.enemiesMs.toFixed(2)} ms`,
+    `lighting ${perf.lightingMs.toFixed(2)} ms`,
+    `fog ${perf.fogMs.toFixed(2)} ms`,
+    `static light ${perf.staticLightMs.toFixed(1)} ms`,
+  ];
+
+  screenCtx.save();
+  screenCtx.font = '16px monospace';
+  screenCtx.textBaseline = 'top';
+  screenCtx.fillStyle = 'rgba(0,0,0,0.72)';
+  screenCtx.fillRect(10, 10, 230, 132);
+  screenCtx.fillStyle = '#d8f6ff';
+  for (let i = 0; i < lines.length; i++) {
+    screenCtx.fillText(lines[i], 20, 18 + i * 18);
+  }
+  screenCtx.restore();
+}
+
 function draw() {
+  const drawStart = performance.now();
   ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 
   ctx.save();
   ctx.translate(-camera.x, -camera.y);
   drawFloor();
   drawWalls();
+  drawDoors();
   drawLamps();
-  drawEnemies();
+  measurePerf('enemiesMs', drawEnemies);
   drawProjectiles();
   drawPlayer();
-  drawLighting();
-  drawFog();
+  measurePerf('lightingMs', drawLighting);
+  measurePerf('fogMs', drawFog);
   drawSoundEvents();
   drawEnemyLabels();
   drawExfilPoints();
@@ -588,16 +1026,42 @@ function draw() {
     VIEWPORT_WIDTH * GAME_SCALE,
     VIEWPORT_HEIGHT * GAME_SCALE
   );
+  drawPerfOverlay();
+  recordPerf('drawMs', performance.now() - drawStart);
 }
 
-function loop() {
-  update();
+let lastFrameTime = null;
+let simAccumulator = 0;
+
+function loop(frameTime) {
+  if (lastFrameTime === null) lastFrameTime = frameTime;
+
+  const elapsed = Math.min(frameTime - lastFrameTime, 250);
+  lastFrameTime = frameTime;
+  simAccumulator += elapsed;
+  if (elapsed > 0) recordPerf('fps', 1000 / elapsed);
+
+  let simSteps = 0;
+  let updateMs = 0;
+  while (simAccumulator >= SIM_STEP_MS && simSteps < MAX_SIM_STEPS_PER_FRAME) {
+    const updateStart = performance.now();
+    update();
+    updateMs += performance.now() - updateStart;
+    simAccumulator -= SIM_STEP_MS;
+    simSteps++;
+  }
+
+  if (simSteps === MAX_SIM_STEPS_PER_FRAME) simAccumulator = 0;
+  perf.simSteps = simSteps;
+  recordPerf('updateMs', updateMs);
+
   draw();
   requestAnimationFrame(loop);
 }
 
 initLighting(MISSION_LIGHTING);
+resetDoors();
 resetCamera();
 initPickup();
 initExfil();
-loop();
+requestAnimationFrame(loop);

@@ -147,7 +147,8 @@ Useful ratios to preserve:
 | `game.js` | Add camera state (`cameraX/cameraY`, soft look-ahead, hard-aim offset, LT input, easing, clamping); apply `ctx.translate` in the draw pipeline; draw HUD after restore |
 | `player.js` | Accept hard-aim state from `game.js`; while held, disable sprint and force movement/noise to the sneak tier |
 | `enemy.js` | Split the red player-hit flash into a screen-space draw helper so it stays outside the camera transform |
-| `design/feature_10_follow_camera_hardaim.md` | This document |
+| `Operation guide/Feature planning/feature_10_follow_camera_hardaim.md` | This planning document |
+| `Live features/feature_10_follow_camera_hardaim.md` | Current live-state reference |
 
 (Fog/lighting camera-awareness is deferred until the map exceeds the viewport.)
 

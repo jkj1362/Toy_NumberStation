@@ -76,7 +76,8 @@ const NAV_EDGES = [
 ];
 
 function _pointHitsExpandedWall(x, y, radius = ENEMY_RADIUS) {
-  for (const wall of WALLS) {
+  const blockers = typeof getMovementBlockers === 'function' ? getMovementBlockers() : WALLS;
+  for (const wall of blockers) {
     if (x > wall.x - radius && x < wall.x + wall.w + radius &&
         y > wall.y - radius && y < wall.y + wall.h + radius) {
       return true;
@@ -370,6 +371,7 @@ function followNavPath(e) {
     }
     const d = Math.sqrt(d2);
     const prevX = e.x, prevY = e.y;
+    if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_RADIUS + ARRIVAL_RADIUS);
     e.x += (dx / d) * e.patrolSpeed;
     e.y += (dy / d) * e.patrolSpeed;
     e.targetAngle = Math.atan2(dx, -dy);
@@ -453,6 +455,7 @@ function moveTowardPlayer(e, pdx, pdy, pd2) {
   if (_pathSegmentClear(e.x, e.y, player.x, player.y)) {
     const pd = Math.sqrt(pd2);
     const prevX = e.x, prevY = e.y;
+    if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_RADIUS + ARRIVAL_RADIUS);
     e.x += (pdx / pd) * e.patrolSpeed;
     e.y += (pdy / pd) * e.patrolSpeed;
     e.targetAngle = Math.atan2(pdx, -pdy);
@@ -548,7 +551,13 @@ function updateEnemyProjectiles() {
       playerHitFlashTimer = PLAYER_HIT_FLASH_FRAMES;
     }
 
-    if (hitPlayer || hitsWall(p.x, p.y) || outOfBounds) {
+    let hitDoor = false;
+    if (!hitPlayer && typeof hitDoorAt === 'function') {
+      const door = hitDoorAt(p.x, p.y);
+      if (door && typeof damageDoor === 'function') hitDoor = damageDoor(door);
+    }
+
+    if (hitPlayer || hitDoor || hitsWall(p.x, p.y) || outOfBounds) {
       enemyProjectiles.splice(i, 1);
     }
   }
@@ -719,6 +728,7 @@ function updateEnemies() {
         // Moving toward node
         const dist = Math.sqrt(dist2);
         const prevX = e.x, prevY = e.y;
+        if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_RADIUS + ARRIVAL_RADIUS);
         e.x += (dx / dist) * e.patrolSpeed;
         e.y += (dy / dist) * e.patrolSpeed;
         e.targetAngle = Math.atan2(dx, -dy);

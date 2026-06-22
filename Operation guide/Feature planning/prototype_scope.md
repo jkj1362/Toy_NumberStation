@@ -32,6 +32,7 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | Enemy patrol, alert pursuit, search, and cautious behavior | Done |
 | Walk/run movement noise tradeoff | Done |
 | Follow camera and hard-aim scouting | Done |
+| Door system | First pass implemented; visual QA/tuning pending |
 | Fixed FHD internal gameplay resolution and presentation canvas | Done |
 
 ## Feature Build Order
@@ -46,7 +47,7 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | 6 | **Enemy Movement & Patrol** | Done. Waypoint patrol routes, including cross-room patrol |
 | 7 | **Enemy AI State Machine** | Done. Alert pursuit, last-known search, and lingering cautious behavior |
 | 8 | **Walk vs. Run + Noise Tradeoff** | Done. Shift/run speed, walk-slow, and movement noise tradeoff |
-| 9 | **Door System** | Next. Closed doors block movement/light; open doors create passable light apertures; doors have HP |
+| 9 | **Door System** | Implemented first pass. Manual visual QA/tuning still needed for door placement, light leakage, and enemy door behavior |
 | 10 | **Follow Camera & Hard-Aim Scouting** | Done. Player-centered camera; LT hard-aim look-ahead |
 | ## | **Metagame & Daytime Systems** | Conceptual. Deferred until night-phase prototype is validated |
 

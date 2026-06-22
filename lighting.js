@@ -10,9 +10,15 @@ let lightingApertures = [];
 let lightCanvas = document.createElement('canvas');
 let lightCtx = lightCanvas.getContext('2d');
 const STATIC_LIGHT_RENDER_SCALE = 4;
+const DYNAMIC_LIGHT_RENDER_SCALE = 2;
 let staticLightCanvas = document.createElement('canvas');
 let staticLightCtx = staticLightCanvas.getContext('2d');
+let staticLightValueCanvas = document.createElement('canvas');
+let staticLightValueCtx = staticLightValueCanvas.getContext('2d');
+let staticLightSourceCanvas = document.createElement('canvas');
+let staticLightSourceCtx = staticLightSourceCanvas.getContext('2d');
 let staticLightDirty = true;
+let staticLightImageData = null;
 
 function clampLight(v) {
   return Math.max(0, Math.min(1, v));
@@ -52,6 +58,7 @@ function scaleLightingAperture(aperture) {
     falloffPower: aperture.falloffPower ?? 1.1,
     spreadRadians: aperture.spreadRadians ?? Math.PI / 3,
     open: aperture.open !== false,
+    defaultOpen: aperture.open !== false,
   };
 }
 
@@ -70,13 +77,43 @@ function initLighting(missionLighting) {
     aperture.visibilityPolygon = computeApertureVisibilityPolygon(aperture);
   }
   staticLightDirty = true;
+  staticLightImageData = null;
 }
 
 function resetLighting() {
   for (const lamp of lightingLamps) {
     lamp.active = lamp.defaultActive;
   }
+  for (const aperture of lightingApertures) {
+    aperture.open = aperture.defaultOpen;
+  }
   staticLightDirty = true;
+  staticLightImageData = null;
+}
+
+function markStaticLightingDirty() {
+  staticLightDirty = true;
+  staticLightImageData = null;
+}
+
+function setLightingAperturesOpen(ids, open) {
+  const idSet = new Set(Array.isArray(ids) ? ids : [ids]);
+  let changed = false;
+  for (const aperture of lightingApertures) {
+    if (!idSet.has(aperture.id) || aperture.open === open) continue;
+    aperture.open = open;
+    changed = true;
+  }
+  if (changed) markStaticLightingDirty();
+}
+
+function rebuildLightingVisibilityPolygons() {
+  for (const lamp of lightingLamps) {
+    lamp.visibilityPolygon = computeLampVisibilityPolygon(lamp);
+  }
+  for (const aperture of lightingApertures) {
+    aperture.visibilityPolygon = computeApertureVisibilityPolygon(aperture);
+  }
 }
 
 function getLampOffset(lamp) {
@@ -135,6 +172,7 @@ function castLampRay(lamp, angle) {
 }
 
 function computeLampVisibilityPolygon(lamp) {
+  if (typeof rebuildRayGeometryIfNeeded === 'function') rebuildRayGeometryIfNeeded();
   const eps = 0.0001;
   const angles = [];
 
@@ -171,6 +209,7 @@ function castApertureRay(aperture, angle) {
 }
 
 function computeApertureVisibilityPolygon(aperture) {
+  if (typeof rebuildRayGeometryIfNeeded === 'function') rebuildRayGeometryIfNeeded();
   const eps = 0.0001;
   const dir = getDirectionVector(aperture.direction);
   const half = aperture.spreadRadians / 2;
@@ -265,7 +304,7 @@ function getLightLevel(wx, wy, options = {}) {
   return clampLight(light);
 }
 
-function getStaticLightLevel(wx, wy) {
+function computeStaticLightLevel(wx, wy) {
   let light = lightingGlobalAmbient;
   light = Math.max(light, getZoneAmbient(wx, wy));
 
@@ -278,6 +317,19 @@ function getStaticLightLevel(wx, wy) {
   }
 
   return clampLight(light);
+}
+
+function getCachedStaticLightLevel(wx, wy) {
+  if (!staticLightImageData || staticLightDirty) return null;
+  const x = Math.max(0, Math.min(staticLightImageData.width - 1, Math.floor(wx / STATIC_LIGHT_RENDER_SCALE)));
+  const y = Math.max(0, Math.min(staticLightImageData.height - 1, Math.floor(wy / STATIC_LIGHT_RENDER_SCALE)));
+  const i = (y * staticLightImageData.width + x) * 4;
+  return clampLight(1 - staticLightImageData.data[i + 3] / 255);
+}
+
+function getStaticLightLevel(wx, wy) {
+  const cached = getCachedStaticLightLevel(wx, wy);
+  return cached === null ? computeStaticLightLevel(wx, wy) : cached;
 }
 
 function isLit(wx, wy) {
@@ -296,7 +348,7 @@ function hitLampAt(wx, wy) {
     const dy = wy - lamp.lightY;
     if (dx * dx + dy * dy <= hitRadius * hitRadius) {
       lamp.active = false;
-      staticLightDirty = true;
+      markStaticLightingDirty();
       return true;
     }
   }
@@ -387,42 +439,175 @@ function drawApertureLight(aperture) {
   lightCtx.restore();
 }
 
-function drawPlayerGlow() {
-  const pg = lightCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, PLAYER_GLOW_RADIUS);
+function drawPlayerGlow(offsetX = 0, offsetY = 0, renderScale = 1) {
+  const glowX = (player.x - offsetX) / renderScale;
+  const glowY = (player.y - offsetY) / renderScale;
+  const glowRadius = PLAYER_GLOW_RADIUS / renderScale;
+  const pg = lightCtx.createRadialGradient(glowX, glowY, 0, glowX, glowY, glowRadius);
   pg.addColorStop(0, 'rgba(255,255,255,1)');
   pg.addColorStop(0.4, 'rgba(255,255,255,1)');
   pg.addColorStop(1, 'rgba(255,255,255,0)');
   lightCtx.fillStyle = pg;
   lightCtx.beginPath();
-  lightCtx.arc(player.x, player.y, PLAYER_GLOW_RADIUS, 0, Math.PI * 2);
+  lightCtx.arc(glowX, glowY, glowRadius, 0, Math.PI * 2);
   lightCtx.fill();
 }
 
-function renderStaticLightCanvas() {
-  const w = Math.ceil(GAME_WIDTH / STATIC_LIGHT_RENDER_SCALE);
-  const h = Math.ceil(GAME_HEIGHT / STATIC_LIGHT_RENDER_SCALE);
-  if (staticLightCanvas.width !== w || staticLightCanvas.height !== h) {
-    staticLightCanvas.width = w;
-    staticLightCanvas.height = h;
-  }
-
-  const image = staticLightCtx.createImageData(w, h);
-  const data = image.data;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const wx = Math.min(GAME_WIDTH, (x + 0.5) * STATIC_LIGHT_RENDER_SCALE);
-      const wy = Math.min(GAME_HEIGHT, (y + 0.5) * STATIC_LIGHT_RENDER_SCALE);
-      const light = getStaticLightLevel(wx, wy);
-      const alpha = Math.round((1 - light) * 255);
-      const i = (y * w + x) * 4;
-      data[i] = 0;
-      data[i + 1] = 0;
-      data[i + 2] = 0;
-      data[i + 3] = alpha;
+function resizeStaticLightCanvases(w, h) {
+  const canvases = [staticLightCanvas, staticLightValueCanvas, staticLightSourceCanvas];
+  for (const canvas of canvases) {
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
     }
   }
+}
+
+function lightCanvasX(wx) { return wx / STATIC_LIGHT_RENDER_SCALE; }
+function lightCanvasY(wy) { return wy / STATIC_LIGHT_RENDER_SCALE; }
+function lightCanvasUnit(v) { return v / STATIC_LIGHT_RENDER_SCALE; }
+
+function renderStaticSource(drawSource) {
+  staticLightSourceCtx.setTransform(1, 0, 0, 1, 0, 0);
+  staticLightSourceCtx.globalCompositeOperation = 'source-over';
+  staticLightSourceCtx.clearRect(0, 0, staticLightSourceCanvas.width, staticLightSourceCanvas.height);
+
+  drawSource(staticLightSourceCtx);
+
+  staticLightValueCtx.save();
+  staticLightValueCtx.globalCompositeOperation = 'lighten';
+  staticLightValueCtx.drawImage(staticLightSourceCanvas, 0, 0);
+  staticLightValueCtx.restore();
+}
+
+function renderStaticAmbientZones() {
+  for (const zone of lightingZones) {
+    if (zone.ambient <= 0) continue;
+    renderStaticSource((sourceCtx) => {
+      sourceCtx.fillStyle = `rgba(255,255,255,${clampLight(zone.ambient)})`;
+      sourceCtx.fillRect(
+        lightCanvasX(zone.x),
+        lightCanvasY(zone.y),
+        lightCanvasX(zone.w),
+        lightCanvasY(zone.h)
+      );
+    });
+  }
+}
+
+function renderStaticLampLight(lamp) {
+  if (!lamp.active || !lamp.visibilityPolygon || lamp.visibilityPolygon.length < 3) return;
+
+  renderStaticSource((sourceCtx) => {
+    const w = staticLightSourceCanvas.width;
+    const h = staticLightSourceCanvas.height;
+
+    sourceCtx.save();
+    sourceCtx.beginPath();
+    if (lamp.wallSide === 'N') sourceCtx.rect(0, lightCanvasY(lamp.y - scaleGameY(18)), w, h);
+    else if (lamp.wallSide === 'S') sourceCtx.rect(0, 0, w, lightCanvasY(lamp.y + scaleGameY(18)));
+    else if (lamp.wallSide === 'E') sourceCtx.rect(0, 0, lightCanvasX(lamp.x + scaleGameX(18)), h);
+    else sourceCtx.rect(lightCanvasX(lamp.x - scaleGameX(18)), 0, w, h);
+    sourceCtx.clip();
+
+    sourceCtx.beginPath();
+    sourceCtx.moveTo(lightCanvasX(lamp.visibilityPolygon[0].x), lightCanvasY(lamp.visibilityPolygon[0].y));
+    for (let i = 1; i < lamp.visibilityPolygon.length; i++) {
+      sourceCtx.lineTo(lightCanvasX(lamp.visibilityPolygon[i].x), lightCanvasY(lamp.visibilityPolygon[i].y));
+    }
+    sourceCtx.closePath();
+    sourceCtx.clip();
+
+    const lightX = lightCanvasX(lamp.lightX);
+    const lightY = lightCanvasY(lamp.lightY);
+    const radius = lightCanvasUnit(lamp.radius);
+    const intensity = clampLight(lamp.intensity);
+    const falloffAt = (t) => intensity * Math.pow(1 - t, lamp.falloffPower);
+    const grad = sourceCtx.createRadialGradient(lightX, lightY, 0, lightX, lightY, radius);
+    grad.addColorStop(0, `rgba(255,255,255,${falloffAt(0)})`);
+    grad.addColorStop(0.45, `rgba(255,255,255,${falloffAt(0.45)})`);
+    grad.addColorStop(0.75, `rgba(255,255,255,${falloffAt(0.75)})`);
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    sourceCtx.fillStyle = grad;
+    sourceCtx.beginPath();
+    sourceCtx.arc(lightX, lightY, radius, 0, Math.PI * 2);
+    sourceCtx.fill();
+    sourceCtx.restore();
+  });
+}
+
+function renderStaticApertureLight(aperture) {
+  if (!aperture.open || !aperture.visibilityPolygon || aperture.visibilityPolygon.length < 3) return;
+
+  renderStaticSource((sourceCtx) => {
+    const dir = getDirectionVector(aperture.direction);
+
+    sourceCtx.save();
+    sourceCtx.beginPath();
+    sourceCtx.moveTo(lightCanvasX(aperture.visibilityPolygon[0].x), lightCanvasY(aperture.visibilityPolygon[0].y));
+    for (let i = 1; i < aperture.visibilityPolygon.length; i++) {
+      sourceCtx.lineTo(lightCanvasX(aperture.visibilityPolygon[i].x), lightCanvasY(aperture.visibilityPolygon[i].y));
+    }
+    sourceCtx.closePath();
+    sourceCtx.clip();
+
+    const startX = lightCanvasX(aperture.x);
+    const startY = lightCanvasY(aperture.y);
+    const endX = lightCanvasX(aperture.x + dir.x * aperture.range);
+    const endY = lightCanvasY(aperture.y + dir.y * aperture.range);
+    const range = lightCanvasUnit(aperture.range);
+    const intensity = clampLight(aperture.intensity);
+    const falloffAt = (t) => intensity * Math.pow(1 - t, aperture.falloffPower);
+    const grad = sourceCtx.createLinearGradient(startX, startY, endX, endY);
+    grad.addColorStop(0, `rgba(255,255,255,${falloffAt(0)})`);
+    grad.addColorStop(0.5, `rgba(255,255,255,${falloffAt(0.5)})`);
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    sourceCtx.fillStyle = grad;
+    sourceCtx.fillRect(
+      Math.min(startX, endX) - range,
+      Math.min(startY, endY) - range,
+      range * 2 + Math.abs(endX - startX),
+      range * 2 + Math.abs(endY - startY)
+    );
+    sourceCtx.restore();
+  });
+}
+
+function renderStaticLightCanvas() {
+  const perfStart = performance.now();
+  const w = Math.ceil(GAME_WIDTH / STATIC_LIGHT_RENDER_SCALE);
+  const h = Math.ceil(GAME_HEIGHT / STATIC_LIGHT_RENDER_SCALE);
+  resizeStaticLightCanvases(w, h);
+  rebuildLightingVisibilityPolygons();
+
+  const ambient = Math.round(clampLight(lightingGlobalAmbient) * 255);
+  staticLightValueCtx.setTransform(1, 0, 0, 1, 0, 0);
+  staticLightValueCtx.globalCompositeOperation = 'source-over';
+  staticLightValueCtx.fillStyle = `rgb(${ambient},${ambient},${ambient})`;
+  staticLightValueCtx.fillRect(0, 0, w, h);
+
+  renderStaticAmbientZones();
+  for (const lamp of lightingLamps) renderStaticLampLight(lamp);
+  for (const aperture of lightingApertures) renderStaticApertureLight(aperture);
+
+  const lightImage = staticLightValueCtx.getImageData(0, 0, w, h);
+  const image = staticLightCtx.createImageData(w, h);
+  const lightData = lightImage.data;
+  const data = image.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const light = Math.max(lightData[i], lightData[i + 1], lightData[i + 2]) / 255;
+    data[i] = 0;
+    data[i + 1] = 0;
+    data[i + 2] = 0;
+    data[i + 3] = Math.round((1 - light) * 255);
+  }
+
   staticLightCtx.putImageData(image, 0, 0);
+  staticLightImageData = image;
   staticLightDirty = false;
+  if (typeof recordPerf === 'function') {
+    recordPerf('staticLightMs', performance.now() - perfStart);
+  }
 }
 
 function drawLamps() {
@@ -435,20 +620,32 @@ function drawLamps() {
 }
 
 function drawLighting() {
-  if (lightCanvas.width !== GAME_WIDTH || lightCanvas.height !== GAME_HEIGHT) {
-    lightCanvas.width = GAME_WIDTH;
-    lightCanvas.height = GAME_HEIGHT;
+  const lightWidth = Math.ceil(VIEWPORT_WIDTH / DYNAMIC_LIGHT_RENDER_SCALE);
+  const lightHeight = Math.ceil(VIEWPORT_HEIGHT / DYNAMIC_LIGHT_RENDER_SCALE);
+  if (lightCanvas.width !== lightWidth || lightCanvas.height !== lightHeight) {
+    lightCanvas.width = lightWidth;
+    lightCanvas.height = lightHeight;
   }
 
   if (staticLightDirty) renderStaticLightCanvas();
 
   lightCtx.clearRect(0, 0, lightCanvas.width, lightCanvas.height);
   lightCtx.imageSmoothingEnabled = true;
-  lightCtx.drawImage(staticLightCanvas, 0, 0, GAME_WIDTH, GAME_HEIGHT);
+  lightCtx.drawImage(
+    staticLightCanvas,
+    camera.x / STATIC_LIGHT_RENDER_SCALE,
+    camera.y / STATIC_LIGHT_RENDER_SCALE,
+    VIEWPORT_WIDTH / STATIC_LIGHT_RENDER_SCALE,
+    VIEWPORT_HEIGHT / STATIC_LIGHT_RENDER_SCALE,
+    0,
+    0,
+    lightWidth,
+    lightHeight
+  );
 
   lightCtx.globalCompositeOperation = 'destination-out';
-  drawPlayerGlow();
+  drawPlayerGlow(camera.x, camera.y, DYNAMIC_LIGHT_RENDER_SCALE);
   lightCtx.globalCompositeOperation = 'source-over';
 
-  ctx.drawImage(lightCanvas, 0, 0);
+  ctx.drawImage(lightCanvas, camera.x, camera.y, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 }

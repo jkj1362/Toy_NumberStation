@@ -68,6 +68,16 @@ When checking current progress or implementing work that affects the codebase, g
 - Take a screenshot of the current game screen.
 - Use the screenshot to decide how to proceed and to QA the result.
 - Treat screenshot verification as part of the normal development loop for visualization work.
+- When the user asks for a visual change or reports a visual problem, inspect the current game screen directly before analyzing the situation or applying a fix.
+
+### Refresh After Code Changes
+
+After making actual codebase changes, refresh the running game so the user can immediately inspect the updated behavior.
+
+- If the game is already open in a browser, refresh that browser page.
+- If the browser refresh is not practical, reopen the game with `Open Game.bat`.
+- Do this after the code fix and before the final response, unless the user explicitly asks not to launch or refresh the game.
+- In the final response, state how the game was refreshed or explain why it could not be refreshed.
 
 This is especially important for upcoming visualization development and QA, where correctness depends on what is actually visible on screen.
 
@@ -92,7 +102,21 @@ Operation guide/session handoff format.md
 ```
 
 Key rules:
-- Save to `Operation guide/` with filename `Handoff_YYYY-MM-DD_slug.md`
+- Save to `Operation guide/Session handoffs/` with filename `Handoff_YYYY-MM-DD_slug.md`
 - Always mark exactly one feature as the next to implement
 - Include a ⚠️ warning for any temporary test layouts or known incomplete states in the code
 - The incoming session must be able to start work immediately from the handoff alone
+
+---
+
+## 6. Documentation Organization
+
+**Keep planning docs separate from live-state docs. Keep feature docs mirrored one-to-one.**
+
+Use these locations:
+- `Operation guide/Feature planning/` contains pre-implementation feature planning docs iterated with AI.
+- `Live features/` contains live-state feature explanation docs describing what the game currently implements.
+- `Operation guide/Session handoffs/` contains session handoff documents.
+- `Operation guide/` root contains common operation docs such as `AGENT.md` and `session handoff format.md`.
+
+Feature planning docs and live feature docs must match one-to-one by feature. If there is a planning doc such as `Operation guide/Feature planning/feature_02_lighting.md`, there must also be a live-state doc such as `Live features/feature_02_lighting.md`.
