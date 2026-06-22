@@ -22,5 +22,5 @@ The mission loop is: infiltrate, find the pickup, collect it, activate exfil, an
 
 ## Related Files
 
+- `input.js`
 - `game.js`
-

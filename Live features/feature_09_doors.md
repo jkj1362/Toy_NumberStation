@@ -28,7 +28,7 @@ Doors are dynamic geometry. They affect movement, raycasting, lighting, enemy pa
 
 ## Related Files
 
+- `input.js`
 - `game.js`
 - `lighting.js`
 - `enemy.js`
-

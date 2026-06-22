@@ -10,7 +10,7 @@ The game renders a fixed `1920 x 1080` viewport into a larger `3200 x 1800` worl
 - The camera follows the player with smoothing.
 - A soft look-ahead follows the player's facing direction during normal movement.
 - Holding hard aim uses a much larger look-ahead distance, clamped to keep the viewport inside the world.
-- Hard aim is held with gamepad left trigger or keyboard `Shift`.
+- Hard aim is held with right mouse button or gamepad left trigger.
 - Hard aim also forces sneak speed and suppresses sprint.
 - The render loop draws world-space content through the camera transform, then composites to the screen canvas.
 
@@ -23,5 +23,5 @@ The game renders a fixed `1920 x 1080` viewport into a larger `3200 x 1800` worl
 ## Related Files
 
 - `game.js`
+- `input.js`
 - `player.js`
-

@@ -43,40 +43,11 @@ const player = {
   targetAngle: 0,
 };
 
-const keys = {};
-let rtWasPressed = false;
-let sprintWasPressed = false;
-
-window.addEventListener('keydown', e => keys[e.key] = true);
-window.addEventListener('keyup', e => keys[e.key] = false);
-
-const DEADZONE = 0.15;
-
 function lerpAngle(current, target, t) {
   let diff = target - current;
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
   return current + diff * t;
-}
-
-function readStick(gp, axisX, axisY) {
-  if (!gp) return { x: 0, y: 0 };
-  const x = Math.abs(gp.axes[axisX]) > DEADZONE ? gp.axes[axisX] : 0;
-  const y = Math.abs(gp.axes[axisY]) > DEADZONE ? gp.axes[axisY] : 0;
-  return { x, y };
-}
-
-function readMoveStick(gp) {
-  if (!gp) return { x: 0, y: 0, amount: 0 };
-  const rawX = gp.axes[0] ?? 0;
-  const rawY = gp.axes[1] ?? 0;
-  const magnitude = Math.min(1, Math.hypot(rawX, rawY));
-  if (magnitude <= DEADZONE) return { x: 0, y: 0, amount: 0 };
-  return {
-    x: rawX / magnitude,
-    y: rawY / magnitude,
-    amount: (magnitude - DEADZONE) / (1 - DEADZONE),
-  };
 }
 
 function lerp(a, b, t) {
@@ -95,54 +66,44 @@ function resetPlayer() {
   player.targetAngle = 0;
 }
 
-function updatePlayer(gp, activeProjectiles, options = {}) {
+function updatePlayer(playerInput, activeProjectiles) {
   const prevX = player.x, prevY = player.y;
-  const hardAim = options.hardAim === true;
+  const hardAim = playerInput.hardAimHeld === true;
+  const forcedSneak = hardAim || playerInput.sneakActive === true;
   player.hardAim = hardAim;
 
-  // Face button A toggles sprint. Sprint is intentionally gamepad-only for this pass.
-  const sprintPressed = gp?.buttons[0]?.pressed ?? false;
-  if (!hardAim && sprintPressed && !sprintWasPressed) player.sprintActive = !player.sprintActive;
-  sprintWasPressed = sprintPressed;
-  if (hardAim) player.sprintActive = false;
+  // Controller A toggles sprint; keyboard Shift is a hold sprint from input.js.
+  if (!forcedSneak && playerInput.sprintPressed) player.sprintActive = !player.sprintActive;
+  if (forcedSneak) player.sprintActive = false;
 
-  player.speed = hardAim ? PLAYER_SNEAK_SPEED : PLAYER_WALK_SPEED;
-  player.noiseScale = hardAim ? PLAYER_SNEAK_NOISE_SCALE : PLAYER_WALK_NOISE_SCALE;
-  player.movementMode = hardAim ? 'sneak' : 'walk';
+  player.speed = forcedSneak ? PLAYER_SNEAK_SPEED : PLAYER_WALK_SPEED;
+  player.noiseScale = forcedSneak ? PLAYER_SNEAK_NOISE_SCALE : PLAYER_WALK_NOISE_SCALE;
+  player.movementMode = forcedSneak ? 'sneak' : 'walk';
 
-  // WASD remains a simple walking fallback.
-  let keyboardX = 0, keyboardY = 0;
-  if (keys['a']) keyboardX -= 1;
-  if (keys['d']) keyboardX += 1;
-  if (keys['w']) keyboardY -= 1;
-  if (keys['s']) keyboardY += 1;
-  const keyboardMagnitude = Math.hypot(keyboardX, keyboardY);
-  if (keyboardMagnitude > 0) {
-    const keyboardSpeed = hardAim ? PLAYER_SNEAK_SPEED : PLAYER_WALK_SPEED;
-    player.x += (keyboardX / keyboardMagnitude) * keyboardSpeed;
-    player.y += (keyboardY / keyboardMagnitude) * keyboardSpeed;
-  }
+  if (playerInput.moveAmount > 0) {
+    const sprinting = !forcedSneak && (playerInput.sprintHeld || player.sprintActive);
 
-  // L-stick controls sneak-to-walk analog movement. Stick tilt alone cannot sprint.
-  const left = readMoveStick(gp);
-  if (left.amount > 0) {
-    if (hardAim) {
+    if (forcedSneak) {
       player.speed = PLAYER_SNEAK_SPEED;
       player.noiseScale = PLAYER_SNEAK_NOISE_SCALE;
       player.movementMode = 'sneak';
-    } else if (player.sprintActive) {
+    } else if (sprinting) {
       player.speed = PLAYER_SPRINT_SPEED;
       player.noiseScale = PLAYER_SPRINT_NOISE_SCALE;
       player.movementMode = 'sprint';
+    } else if (playerInput.moveIsAnalog) {
+      player.speed = lerp(PLAYER_SNEAK_SPEED, PLAYER_WALK_SPEED, playerInput.moveAmount);
+      player.noiseScale = lerp(PLAYER_SNEAK_NOISE_SCALE, PLAYER_WALK_NOISE_SCALE, playerInput.moveAmount);
+      player.movementMode = playerInput.moveAmount >= WALK_MODE_STICK_THRESHOLD ? 'walk' : 'sneak';
     } else {
-      player.speed = lerp(PLAYER_SNEAK_SPEED, PLAYER_WALK_SPEED, left.amount);
-      player.noiseScale = lerp(PLAYER_SNEAK_NOISE_SCALE, PLAYER_WALK_NOISE_SCALE, left.amount);
-      player.movementMode = left.amount >= WALK_MODE_STICK_THRESHOLD ? 'walk' : 'sneak';
+      player.speed = PLAYER_WALK_SPEED;
+      player.noiseScale = PLAYER_WALK_NOISE_SCALE;
+      player.movementMode = 'walk';
     }
 
-    player.x += left.x * player.speed;
-    player.y += left.y * player.speed;
-  } else if (player.sprintActive) {
+    player.x += playerInput.moveX * player.speed;
+    player.y += playerInput.moveY * player.speed;
+  } else {
     player.sprintActive = false;
   }
 
@@ -155,16 +116,10 @@ function updatePlayer(gp, activeProjectiles, options = {}) {
 
   if (player.x !== prevX || player.y !== prevY) notifyPlayerMoved();
 
-  // R-stick rotation (axes 2, 3) updates target, angle lerps toward it.
-  const right = readStick(gp, 2, 3);
-  if (right.x !== 0 || right.y !== 0) {
-    player.targetAngle = Math.atan2(right.x, -right.y);
-  }
+  if (playerInput.aimActive) player.targetAngle = playerInput.aimAngle;
   player.angle = lerpAngle(player.angle, player.targetAngle, 0.18);
 
-  // RT (button 7) fires projectile on press, not hold.
-  const rtPressed = gp?.buttons[7]?.pressed ?? false;
-  if (rtPressed && !rtWasPressed) {
+  if (playerInput.shootPressed) {
     const dx = Math.sin(player.angle);
     const dy = -Math.cos(player.angle);
     activeProjectiles.push({
@@ -176,7 +131,6 @@ function updatePlayer(gp, activeProjectiles, options = {}) {
     });
     emitSound(player.x, player.y, GUNSHOT_RADIUS, true);
   }
-  rtWasPressed = rtPressed;
 }
 
 function drawPlayer() {

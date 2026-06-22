@@ -561,12 +561,6 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-function isHardAimHeld(gp) {
-  const leftTrigger = gp?.buttons[6];
-  const triggerValue = leftTrigger?.value ?? (leftTrigger?.pressed ? 1 : 0);
-  return triggerValue > 0.5 || (keys['Shift'] ?? false);
-}
-
 function getCameraLookAhead(distance) {
   const dx = Math.sin(player.angle);
   const dy = -Math.cos(player.angle);
@@ -611,23 +605,24 @@ function reset() {
   initExfil();
 }
 
-let bWasPressed = false;
-let eWasPressed = false;
-
 function update() {
-  const gp = navigator.getGamepads?.()[0] ?? null;
-  const hardAimHeld = isHardAimHeld(gp);
-  updatePlayer(gp, projectiles, { hardAim: hardAimHeld });
+  updateInput({
+    canvas,
+    cameraX: camera.x,
+    cameraY: camera.y,
+    playerX: player.x,
+    playerY: player.y,
+    viewportWidth: VIEWPORT_WIDTH,
+    viewportHeight: VIEWPORT_HEIGHT,
+  });
+
+  const hardAimHeld = input.hardAimHeld;
+  updatePlayer(input, projectiles);
   updateCamera(hardAimHeld);
 
-  // B button (button 1) — reset
-  const bPressed = gp?.buttons[1]?.pressed ?? false;
-  if (bPressed && !bWasPressed) reset();
-  bWasPressed = bPressed;
+  if (input.resetPressed) reset();
 
-  // E key / button 2 (X face button) — interact
-  const ePressed = (keys['e'] ?? false) || (gp?.buttons[2]?.pressed ?? false); // button 2 = X (face left)
-  const interactPressed = ePressed && !eWasPressed;
+  const interactPressed = input.interactPressed;
   const doorInteractionHandled = interactPressed && toggleNearbyDoor(player);
 
   if (gamePhase === 'infiltrate' && !pickup.collected) {
@@ -667,8 +662,6 @@ function update() {
       }
     }
   }
-
-  eWasPressed = ePressed;
 
   updateEnemies();
 
