@@ -33,6 +33,7 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | Walk/run movement noise tradeoff | Done |
 | Follow camera and hard-aim scouting | Done |
 | Door system | First pass implemented; visual QA/tuning pending |
+| Player/enemy health, damage, death, corpses, and game over | First pass implemented |
 | Fixed FHD internal gameplay resolution and presentation canvas | Done |
 
 ## Feature Build Order
@@ -49,6 +50,7 @@ All day-cycle systems are deferred. The prototype is currently about making the 
 | 8 | **Walk vs. Run + Noise Tradeoff** | Done. Shift/run speed, walk-slow, and movement noise tradeoff |
 | 9 | **Door System** | Implemented first pass. Manual visual QA/tuning still needed for door placement, light leakage, and enemy door behavior |
 | 10 | **Follow Camera & Hard-Aim Scouting** | Done. Player-centered camera; LT hard-aim look-ahead |
+| 11 | **Health, Damage, Death & Corpses** | First pass implemented. Player/enemy HP, damaging shots, melee damage, corpses, and mission-failed reset flow |
 | ## | **Metagame & Daytime Systems** | Conceptual. Deferred until night-phase prototype is validated |
 
 ## Key Design Decisions

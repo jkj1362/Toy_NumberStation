@@ -20,7 +20,7 @@ Enemies run a state machine covering patrol, suspicious reaction, alert pursuit/
 ## Current Caveats
 
 - Pathfinding uses a small hardcoded navigation graph, not a full navmesh.
-- The player does not have health/death flow beyond a hit flash from enemy projectiles.
+- Enemy AI does not yet coordinate around defeated allies or corpses; defeated enemies leave non-blocking corpses.
 - The precision archetype exists as a behavior branch but currently delegates to shooter behavior.
 
 ## Related Files

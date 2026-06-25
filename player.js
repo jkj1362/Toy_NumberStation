@@ -24,9 +24,19 @@ const PLAYER_SNEAK_NOISE_SCALE = 0.45;
 const PLAYER_WALK_NOISE_SCALE = 1;
 const PLAYER_SPRINT_NOISE_SCALE = 1.6;
 const WALK_MODE_STICK_THRESHOLD = 0.85;
+const PLAYER_MAX_HEALTH = 100;
+const PLAYER_PROJECTILE_DAMAGE = 100;
 
 const PLAYER_RADIUS = scalePlayerUnit(28); // outermost extent of the character shape
 const VISION_ANGLE = Math.PI * 2 / 3; // 120 deg total field of view (tune between PI/2 and 5PI/6 for 90-150 deg)
+const HARD_AIM_VISION_MULTIPLIER = 0.5;
+const NORMAL_AIM_TURN_EASE = 0.18;
+const HARD_AIM_TURN_EASE = 0.10;
+const HARD_AIM_MAGNET_ENABLED = true;
+const HARD_AIM_MAGNET_ANGLE = Math.PI / 14; // about 13 degrees
+const HARD_AIM_MAGNET_RANGE = scalePlayerUnit(520);
+const HARD_AIM_MAGNET_STRENGTH = 0.25;
+const HARD_AIM_MAGNET_RELEASE_FRAMES = 10;
 const PLAYER_GLOW_RADIUS = scalePlayerUnit(80);
 const PLAYER_PROXIMITY_RADIUS = scalePlayerUnit(50);
 
@@ -37,8 +47,14 @@ const player = {
   speed: PLAYER_WALK_SPEED,
   noiseScale: PLAYER_WALK_NOISE_SCALE,
   movementMode: 'walk',
+  maxHealth: PLAYER_MAX_HEALTH,
+  health: PLAYER_MAX_HEALTH,
+  alive: true,
   sprintActive: false,
   hardAim: false,
+  aimAssistTarget: null,
+  aimAssistReleaseTimer: 0,
+  aimAssistBlend: 0,
   angle: 0,
   targetAngle: 0,
 };
@@ -54,19 +70,79 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function angleDiff(a, b) {
+  let diff = a - b;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return diff;
+}
+
 function resetPlayer() {
   player.x = PLAYER_START.x;
   player.y = PLAYER_START.y;
   player.speed = PLAYER_WALK_SPEED;
   player.noiseScale = PLAYER_WALK_NOISE_SCALE;
   player.movementMode = 'walk';
+  player.maxHealth = PLAYER_MAX_HEALTH;
+  player.health = PLAYER_MAX_HEALTH;
+  player.alive = true;
   player.sprintActive = false;
   player.hardAim = false;
+  player.aimAssistTarget = null;
+  player.aimAssistReleaseTimer = 0;
+  player.aimAssistBlend = 0;
   player.angle = 0;
   player.targetAngle = 0;
 }
 
+function damagePlayer(amount, options = {}) {
+  if (player.health <= 0 || player.alive === false) return true;
+  void options;
+  player.health = Math.max(0, player.health - amount);
+  if (player.health <= 0) player.alive = false;
+  return player.health <= 0;
+}
+
+function getPlayerVisionAngle() {
+  return player.hardAim ? VISION_ANGLE * HARD_AIM_VISION_MULTIPLIER : VISION_ANGLE;
+}
+
+function getHardAimAssist(aimAngle) {
+  if (!HARD_AIM_MAGNET_ENABLED || typeof enemies === 'undefined') return { angle: null, enemy: null };
+
+  let bestAngle = null;
+  let bestEnemy = null;
+  let bestScore = Infinity;
+
+  for (const enemy of enemies) {
+    if (enemy.alive === false || enemy.health <= 0) continue;
+
+    const dx = enemy.x - player.x;
+    const dy = enemy.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= 0 || dist > HARD_AIM_MAGNET_RANGE) continue;
+
+    const targetAngle = Math.atan2(dx, -dy);
+    const diff = Math.abs(angleDiff(targetAngle, aimAngle));
+    if (diff > HARD_AIM_MAGNET_ANGLE) continue;
+
+    if (typeof hasLOS === 'function' && !hasLOS(player.x, player.y, enemy.x, enemy.y)) continue;
+    if (typeof isLit === 'function' && !isLit(enemy.x, enemy.y)) continue;
+
+    const score = diff + (dist / HARD_AIM_MAGNET_RANGE) * 0.08;
+    if (score < bestScore) {
+      bestAngle = targetAngle;
+      bestEnemy = enemy;
+      bestScore = score;
+    }
+  }
+
+  return { angle: bestAngle, enemy: bestEnemy };
+}
+
 function updatePlayer(playerInput, activeProjectiles) {
+  if (player.alive === false) return;
+
   const prevX = player.x, prevY = player.y;
   const hardAim = playerInput.hardAimHeld === true;
   const forcedSneak = hardAim || playerInput.sneakActive === true;
@@ -117,7 +193,33 @@ function updatePlayer(playerInput, activeProjectiles) {
   if (player.x !== prevX || player.y !== prevY) notifyPlayerMoved();
 
   if (playerInput.aimActive) player.targetAngle = playerInput.aimAngle;
-  player.angle = lerpAngle(player.angle, player.targetAngle, 0.18);
+  if (hardAim) {
+    const assist = getHardAimAssist(player.targetAngle);
+    player.aimAssistTarget = assist.enemy;
+
+    let assistBlend = 0;
+    if (assist.angle !== null) {
+      if (playerInput.aimAdjusting) {
+        player.aimAssistReleaseTimer = HARD_AIM_MAGNET_RELEASE_FRAMES;
+        assistBlend = 1;
+      } else if (player.aimAssistReleaseTimer > 0) {
+        assistBlend = player.aimAssistReleaseTimer / HARD_AIM_MAGNET_RELEASE_FRAMES;
+        player.aimAssistReleaseTimer--;
+      }
+    } else {
+      player.aimAssistReleaseTimer = 0;
+    }
+
+    player.aimAssistBlend = assistBlend;
+    if (assist.angle !== null && assistBlend > 0) {
+      player.targetAngle = lerpAngle(player.targetAngle, assist.angle, HARD_AIM_MAGNET_STRENGTH * assistBlend);
+    }
+  } else {
+    player.aimAssistTarget = null;
+    player.aimAssistReleaseTimer = 0;
+    player.aimAssistBlend = 0;
+  }
+  player.angle = lerpAngle(player.angle, player.targetAngle, hardAim ? HARD_AIM_TURN_EASE : NORMAL_AIM_TURN_EASE);
 
   if (playerInput.shootPressed) {
     const dx = Math.sin(player.angle);
@@ -134,6 +236,8 @@ function updatePlayer(playerInput, activeProjectiles) {
 }
 
 function drawPlayer() {
+  if (player.alive === false) return;
+
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.angle);

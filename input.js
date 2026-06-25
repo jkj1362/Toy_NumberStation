@@ -20,6 +20,7 @@ const input = {
   moveIsAnalog: false,
   aimAngle: 0,
   aimActive: false,
+  aimAdjusting: false,
   hardAimHeld: false,
   sprintHeld: false,
   sprintPressed: false,
@@ -44,6 +45,7 @@ let keyboardSneakActive = false;
 let mouseClientX = 0;
 let mouseClientY = 0;
 let mouseSeen = false;
+let mouseMovedSinceUpdate = false;
 let lastAimDevice = 'keyboardMouse';
 
 window.addEventListener('keydown', (e) => {
@@ -58,6 +60,7 @@ window.addEventListener('mousemove', (e) => {
   mouseClientX = e.clientX;
   mouseClientY = e.clientY;
   mouseSeen = true;
+  mouseMovedSinceUpdate = true;
   lastAimDevice = 'keyboardMouse';
 });
 
@@ -66,6 +69,7 @@ window.addEventListener('mousedown', (e) => {
   mouseClientX = e.clientX;
   mouseClientY = e.clientY;
   mouseSeen = true;
+  mouseMovedSinceUpdate = true;
   lastAimDevice = 'keyboardMouse';
 });
 
@@ -205,15 +209,19 @@ function updateInput(view) {
     if (gamepadAim.active) {
       input.aimAngle = gamepadAim.angle;
       input.aimActive = true;
+      input.aimAdjusting = true;
       input.lastDevice = 'gamepad';
     } else {
       input.aimActive = false;
+      input.aimAdjusting = false;
     }
   } else if (mouseAim.active) {
     input.aimAngle = mouseAim.angle;
     input.aimActive = true;
+    input.aimAdjusting = mouseMovedSinceUpdate;
   } else {
     input.aimActive = false;
+    input.aimAdjusting = false;
   }
 
   const hardAimHeld = isBindingHeld('hardAim') || inputMouseButtons[2] === true || readTrigger(gp, 6);
@@ -239,4 +247,6 @@ function updateInput(view) {
     keyboardSneakActive = false;
     input.sneakActive = false;
   }
+
+  mouseMovedSinceUpdate = false;
 }

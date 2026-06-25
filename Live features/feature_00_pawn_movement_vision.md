@@ -2,7 +2,7 @@
 
 **Live status: Implemented.**
 
-The player pawn is a top-down character with position, facing angle, collision radius, projectiles, a 120-degree vision cone, and a small proximity reveal circle.
+The player pawn is a top-down character with position, facing angle, collision radius, projectiles, a 120-degree base vision cone, and a small proximity reveal circle.
 
 ## Current Behavior
 
@@ -14,11 +14,12 @@ The player pawn is a top-down character with position, facing angle, collision r
 - Keyboard `Shift` holds sprint; gamepad face-bottom / button `0` toggles sprint.
 - Mouse position and gamepad right stick control facing direction.
 - Right mouse button or gamepad left trigger holds hard aim, which also forces sneak movement.
+- Hard aim narrows the player vision cone from 120 degrees to 60 degrees.
 - Left mouse button or gamepad right trigger fires a projectile along the current facing direction.
 - `E` or gamepad face-left / button `2` performs regular interaction.
 - Keyboard `]` or gamepad `B` resets the mission.
 - Movement is pushed out of current movement blockers, which means walls plus closed doors.
-- Fog is removed only inside the wall-occluded vision cone and the close proximity circle.
+- Fog is removed only inside the current wall-occluded vision cone and the close proximity circle.
 
 ## Current Caveats
 

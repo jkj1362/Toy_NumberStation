@@ -41,7 +41,13 @@ const ARRIVAL_RADIUS    = scaleEnemyUnit(8);     // px ??enemy considered "at" a
 const ENEMY_RADIUS      = scaleEnemyUnit(16);    // px ??collision radius for pushOutOfWalls during patrol
 const ENEMY_PROJECTILE_HIT_RADIUS = scaleEnemyUnit(18);
 const ENEMY_PROJECTILE_SPAWN_OFFSET = scaleEnemyUnit(20);
+const ENEMY_MAX_HEALTH = 100;
+const ENEMY_PROJECTILE_DAMAGE = 50;
+const ENEMY_MELEE_DAMAGE = 25;
+const ENEMY_MELEE_RANGE = scaleEnemyUnit(18);
+const ENEMY_MELEE_COOLDOWN_FRAMES = 60;
 const PLAYER_HIT_FLASH_FRAMES = 18;
+const ENEMY_HIT_FLASH_FRAMES = 10;
 
 const STANDARD_VISION = Math.PI * 2 / 3; // 120 deg, matches VISION_ANGLE in player.js
 
@@ -238,6 +244,11 @@ function resetEnemies() {
     patrolPauseTimer:   0,    // counts up; node done when it reaches node.pauseFrames
     patrolSweepAccum:   0,    // accumulated |rotation| at current node
     enemyFootstepTimer: 0,    // counts up; emits footstep every 30 frames while moving
+    maxHealth:          e.maxHealth ?? ENEMY_MAX_HEALTH,
+    health:             e.maxHealth ?? ENEMY_MAX_HEALTH,
+    alive:              true,
+    hitFlashTimer:      0,
+    meleeCooldownTimer: 0,
     lastKnownX:         null, // player position at last confirmed sighting (null = never seen)
     lastKnownY:         null,
     searchPath:         [],   // nav waypoints to lastKnown position
@@ -254,6 +265,14 @@ function resetEnemies() {
   enemyProjectiles.length = 0;
   footstepTimer = 0;
   playerHitFlashTimer = 0;
+}
+
+function damageEnemy(e, amount) {
+  if (!e || e.health <= 0 || e.alive === false) return true;
+  e.health = Math.max(0, e.health - amount);
+  e.hitFlashTimer = ENEMY_HIT_FLASH_FRAMES;
+  if (e.health <= 0) e.alive = false;
+  return e.health <= 0;
 }
 
 // Queue a delayed state change. Does nothing if already reacting (existing pending wins).
@@ -495,6 +514,7 @@ function fireEnemyShot(e) {
 function updateMeleeAlert(e) {
   const pdx = player.x - e.x, pdy = player.y - e.y;
   moveTowardPlayer(e, pdx, pdy, pdx * pdx + pdy * pdy);
+  tryMeleeAttack(e);
 }
 
 function updateShooterAlert(e) {
@@ -549,6 +569,10 @@ function updateEnemyProjectiles() {
 
     if (hitPlayer) {
       playerHitFlashTimer = PLAYER_HIT_FLASH_FRAMES;
+      if (typeof damagePlayer === 'function' && damagePlayer(ENEMY_PROJECTILE_DAMAGE, { type: 'projectile' }) &&
+          typeof setGameOver === 'function') {
+        setGameOver();
+      }
     }
 
     let hitDoor = false;
@@ -560,6 +584,21 @@ function updateEnemyProjectiles() {
     if (hitPlayer || hitDoor || hitsWall(p.x, p.y) || outOfBounds) {
       enemyProjectiles.splice(i, 1);
     }
+  }
+}
+
+function tryMeleeAttack(e) {
+  if (e.meleeCooldownTimer > 0) return;
+  const dx = player.x - e.x;
+  const dy = player.y - e.y;
+  const hitRange = PLAYER_RADIUS + ENEMY_RADIUS + ENEMY_MELEE_RANGE;
+  if (dx * dx + dy * dy > hitRange * hitRange) return;
+
+  e.meleeCooldownTimer = ENEMY_MELEE_COOLDOWN_FRAMES;
+  playerHitFlashTimer = PLAYER_HIT_FLASH_FRAMES;
+  if (typeof damagePlayer === 'function' && damagePlayer(ENEMY_MELEE_DAMAGE, { type: 'melee' }) &&
+      typeof setGameOver === 'function') {
+    setGameOver();
   }
 }
 
@@ -768,6 +807,8 @@ function updateEnemies() {
     e.angle = lerpAngle(e.angle, e.targetAngle, turnRate);
 
     if (e.cautiousTimer > 0) e.cautiousTimer--;
+    if (e.hitFlashTimer > 0) e.hitFlashTimer--;
+    if (e.meleeCooldownTimer > 0) e.meleeCooldownTimer--;
   }
 }
 
@@ -887,7 +928,8 @@ function drawEnemies() {
     ctx.fill();
 
     // Head
-    ctx.fillStyle = isAlert      ? '#ff8c1a'
+    ctx.fillStyle = e.hitFlashTimer > 0 ? '#ffffff'
+                  : isAlert      ? '#ff8c1a'
                   : isSuspicious ? '#d47a20'
                   : isCautious   ? '#cc6633'
                   : '#f55a5a';
@@ -905,6 +947,19 @@ function drawEnemies() {
     ctx.fill();
 
     ctx.restore();
+
+    if (e.health < e.maxHealth) {
+      const barW = scaleEnemyUnit(34);
+      const barH = scaleEnemyUnit(4);
+      const x = e.x - barW / 2;
+      const y = e.y - scaleEnemyUnit(44);
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(x, y, barW, barH);
+      ctx.fillStyle = '#ffdd66';
+      ctx.fillRect(x, y, barW * Math.max(0, e.health / e.maxHealth), barH);
+      ctx.restore();
+    }
 
     // Overhead indicator ??only when enemy is visible to player
     const showIndicator = (isAlert || isSuspicious || isCautious)

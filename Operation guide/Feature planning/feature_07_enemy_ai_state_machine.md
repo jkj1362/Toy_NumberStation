@@ -196,6 +196,8 @@ Initial collision behavior:
 - Player collision can be logged or visually indicated until health/death exists.
 - Do not add a full health system as part of this pass.
 
+Note: this was superseded by Feature 11. Enemy projectile hits now damage player HP.
+
 ---
 
 ### 3. Precision Shooting Enemy
@@ -326,7 +328,7 @@ Implemented:
 Still deferred:
 
 - No precision enemy placement.
-- No player health/death system.
+- Player health/death moved to Feature 11 and is now first-pass implemented.
 - No retreat, cover, strafing, reload animation, or ammo economy.
 
 ---

@@ -105,6 +105,7 @@ const projectiles = [];
 const CAM_SOFT_LOOKAHEAD_DIST = Math.min(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) * 0.10;
 const CAM_HARDAIM_DIST = Math.max(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 const CAM_CORNER_PADDING = scaleGameUnit(48);
+const CAM_HARDAIM_OCCLUSION_PADDING = scaleGameUnit(48);
 const CAM_EASE = 0.18;
 const CAM_LOOKAHEAD_EASE = 0.16;
 const CAMERA_MAX_X = Math.max(0, GAME_WIDTH - VIEWPORT_WIDTH);
@@ -196,6 +197,7 @@ let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 const INTERACT_RADIUS = scaleGameUnit(30);
 const EXFIL_RADIUS    = scaleGameUnit(40);
 const DOOR_INTERACT_RADIUS = scaleGameUnit(45);
+const CORPSE_INTERACT_RADIUS = scaleGameUnit(34);
 const DOOR_DAMAGE = 20;
 const DOOR_OPEN_ANGLE = Math.PI * 5 / 12; // 75 degrees
 
@@ -351,7 +353,8 @@ const ROOMS = [
 // Mission state
 let pickup          = { x: 0, y: 0, roomId: '', collected: false, visibleToPlayer: false };
 let exfilPoints     = [];
-let gamePhase       = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete'
+let corpses         = [];
+let gamePhase       = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete' | 'gameover'
 let hasMapKnowledge = true;         // true = player acquired facility map during day phase
 
 function setDoorApertures(door) {
@@ -499,7 +502,8 @@ function inVisionCone(wx, wy) {
   let diff = bearing - player.angle;
   while (diff >  Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
-  return Math.abs(diff) <= VISION_ANGLE / 2;
+  const visionAngle = typeof getPlayerVisionAngle === 'function' ? getPlayerVisionAngle() : VISION_ANGLE;
+  return Math.abs(diff) <= visionAngle / 2;
 }
 
 function isLit(wx, wy) {
@@ -561,12 +565,21 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-function getCameraLookAhead(distance) {
+function getCameraLookAhead(distance, respectForwardBlocker = false) {
   const dx = Math.sin(player.angle);
   const dy = -Math.cos(player.angle);
   const maxX = Math.abs(dx) > 0.001 ? (VIEWPORT_WIDTH / 2 - CAM_CORNER_PADDING) / Math.abs(dx) : Infinity;
   const maxY = Math.abs(dy) > 0.001 ? (VIEWPORT_HEIGHT / 2 - CAM_CORNER_PADDING) / Math.abs(dy) : Infinity;
-  const dist = Math.max(0, Math.min(distance, maxX, maxY));
+  let dist = Math.max(0, Math.min(distance, maxX, maxY));
+
+  if (respectForwardBlocker) {
+    const hit = castVisRay(player.x, player.y, player.angle - Math.PI / 2);
+    if (hit) {
+      const hitDist = Math.hypot(hit.x - player.x, hit.y - player.y);
+      dist = Math.min(dist, Math.max(0, hitDist - CAM_HARDAIM_OCCLUSION_PADDING));
+    }
+  }
+
   return { x: dx * dist, y: dy * dist };
 }
 
@@ -579,7 +592,7 @@ function resetCamera() {
 
 function updateCamera(hardAimHeld) {
   const lookAheadDistance = hardAimHeld ? CAM_HARDAIM_DIST : CAM_SOFT_LOOKAHEAD_DIST;
-  const lookAheadTarget = getCameraLookAhead(lookAheadDistance);
+  const lookAheadTarget = getCameraLookAhead(lookAheadDistance, hardAimHeld);
   camera.lookAheadX = lerp(camera.lookAheadX, lookAheadTarget.x, CAM_LOOKAHEAD_EASE);
   camera.lookAheadY = lerp(camera.lookAheadY, lookAheadTarget.y, CAM_LOOKAHEAD_EASE);
 
@@ -596,6 +609,7 @@ function reset() {
   resetPlayer();
   resetCamera();
   projectiles.length = 0;
+  corpses.length = 0;
   resetEnemies();
   resetLighting();
   resetDoors();
@@ -603,6 +617,59 @@ function reset() {
   gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
   initPickup();
   initExfil();
+}
+
+function addCorpse(corpse) {
+  corpses.push({
+    interactable: true,
+    looted: false,
+    interactRadius: CORPSE_INTERACT_RADIUS,
+    ...corpse,
+  });
+}
+
+function addEnemyCorpse(enemy) {
+  const radius = typeof ENEMY_RADIUS === 'number' ? ENEMY_RADIUS : scaleGameUnit(16);
+  addCorpse({
+    type: 'enemy',
+    archetype: enemy.archetype,
+    x: enemy.x,
+    y: enemy.y,
+    angle: enemy.angle,
+    radius,
+  });
+}
+
+function addPlayerCorpse() {
+  if (corpses.some(c => c.type === 'player')) return;
+  addCorpse({
+    type: 'player',
+    archetype: 'player',
+    x: player.x,
+    y: player.y,
+    angle: player.angle,
+    radius: PLAYER_RADIUS,
+  });
+}
+
+function getNearbyCorpse(entity = player, radius = CORPSE_INTERACT_RADIUS) {
+  let best = null;
+  let bestD2 = radius * radius;
+  for (const corpse of corpses) {
+    if (!corpse.interactable || corpse.looted) continue;
+    const d2 = (entity.x - corpse.x) ** 2 + (entity.y - corpse.y) ** 2;
+    if (d2 <= bestD2) {
+      best = corpse;
+      bestD2 = d2;
+    }
+  }
+  return best;
+}
+
+function setGameOver() {
+  if (gamePhase === 'complete') return;
+  addPlayerCorpse();
+  gamePhase = 'gameover';
 }
 
 function update() {
@@ -617,10 +684,16 @@ function update() {
   });
 
   const hardAimHeld = input.hardAimHeld;
+
+  if (input.resetPressed) {
+    reset();
+    return;
+  }
+
+  if (gamePhase === 'gameover') return;
+
   updatePlayer(input, projectiles);
   updateCamera(hardAimHeld);
-
-  if (input.resetPressed) reset();
 
   const interactPressed = input.interactPressed;
   const doorInteractionHandled = interactPressed && toggleNearbyDoor(player);
@@ -677,7 +750,10 @@ function update() {
       const dx = p.x - e.x;
       const dy = p.y - e.y;
       if (dx * dx + dy * dy <= ENEMY_HIT_RADIUS * ENEMY_HIT_RADIUS) {
-        enemies.splice(j, 1);
+        if (typeof damageEnemy === 'function' && damageEnemy(e, PLAYER_PROJECTILE_DAMAGE)) {
+          addEnemyCorpse(e);
+          enemies.splice(j, 1);
+        }
         hit = true;
         break;
       }
@@ -763,6 +839,29 @@ function drawDoors() {
   }
 }
 
+function drawCorpses() {
+  for (const corpse of corpses) {
+    ctx.save();
+    ctx.translate(corpse.x, corpse.y);
+    ctx.rotate(corpse.angle);
+    ctx.scale(scaleGameUnit(1), scaleGameUnit(1));
+    ctx.globalAlpha = 0.42;
+
+    const isPlayerCorpse = corpse.type === 'player';
+    ctx.fillStyle = isPlayerCorpse ? '#244d70' : '#702828';
+    ctx.beginPath();
+    ctx.ellipse(0, 4, 20, 12, Math.PI / 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = isPlayerCorpse ? '#3a7ca8' : '#9a3a3a';
+    ctx.beginPath();
+    ctx.arc(0, -8, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
 function drawMapGeometry() {
   ctx.save();
   ctx.globalAlpha = 0.25;
@@ -786,6 +885,63 @@ function drawProjectiles() {
     ctx.stroke();
     ctx.restore();
   }
+}
+
+function drawFireGuide() {
+  if (!player.hardAim || player.alive === false) return;
+
+  const assistActive = !!player.aimAssistTarget;
+  const assistBlend = player.aimAssistBlend ?? 0;
+  const rayAngle = player.angle - Math.PI / 2;
+  const hit = castVisRay(player.x, player.y, rayAngle);
+  const dx = Math.sin(player.angle);
+  const dy = -Math.cos(player.angle);
+  const startX = player.x + dx * scaleGameUnit(24);
+  const startY = player.y + dy * scaleGameUnit(24);
+  const endX = hit ? hit.x : player.x + dx * scaleGameUnit(900);
+  const endY = hit ? hit.y : player.y + dy * scaleGameUnit(900);
+
+  ctx.save();
+  ctx.globalAlpha = assistActive ? 0.72 + 0.18 * assistBlend : 0.72;
+  ctx.strokeStyle = assistActive ? '#7df7ff' : '#d8f6ff';
+  ctx.lineWidth = scaleGameUnit(assistActive ? 1 + 0.5 * assistBlend : 1);
+  ctx.setLineDash([scaleGameUnit(8), scaleGameUnit(8)]);
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawAimAssistReticle() {
+  const target = player.aimAssistTarget;
+  if (!player.hardAim || player.alive === false || !target) return;
+  if (target.alive === false || target.health <= 0) return;
+  if (!inVisionCone(target.x, target.y) || !isLit(target.x, target.y)) return;
+
+  const r = scaleGameUnit(24);
+  const tick = scaleGameUnit(8);
+  const assistBlend = player.aimAssistBlend ?? 0;
+  ctx.save();
+  ctx.globalAlpha = 0.48 + 0.40 * assistBlend;
+  ctx.strokeStyle = '#7df7ff';
+  ctx.lineWidth = scaleGameUnit(1.5);
+  ctx.beginPath();
+  ctx.moveTo(target.x - r, target.y);
+  ctx.lineTo(target.x - r + tick, target.y);
+  ctx.moveTo(target.x + r - tick, target.y);
+  ctx.lineTo(target.x + r, target.y);
+  ctx.moveTo(target.x, target.y - r);
+  ctx.lineTo(target.x, target.y - r + tick);
+  ctx.moveTo(target.x, target.y + r - tick);
+  ctx.lineTo(target.x, target.y + r);
+  ctx.stroke();
+
+  ctx.globalAlpha = 0.45;
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, r * 0.72, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // Cast a single ray from (px,py) at canvas angle `angle`, return nearest wall hit
@@ -857,7 +1013,8 @@ function drawFog() {
   fogCtx.globalCompositeOperation = 'destination-out';
 
   // Wall-occluded visibility polygon; rays stop at wall surfaces.
-  const visPts = computeVisibilityPolygon(player.x, player.y, player.angle);
+  const visionAngle = typeof getPlayerVisionAngle === 'function' ? getPlayerVisionAngle() : VISION_ANGLE;
+  const visPts = computeVisibilityPolygon(player.x, player.y, player.angle, visionAngle);
   if (visPts.length >= 2) {
     fogCtx.beginPath();
     fogCtx.moveTo((player.x - camera.x) / FOG_RENDER_SCALE, (player.y - camera.y) / FOG_RENDER_SCALE);
@@ -985,6 +1142,48 @@ function drawPerfOverlay() {
   screenCtx.restore();
 }
 
+function drawPlayerStatus() {
+  const maxHealth = typeof PLAYER_MAX_HEALTH === 'number' ? PLAYER_MAX_HEALTH : 100;
+  const health = Math.max(0, player.health ?? maxHealth);
+  const barW = 220;
+  const barH = 14;
+  const x = canvas.width - barW - 20;
+  const y = 20;
+
+  screenCtx.save();
+  screenCtx.font = '16px monospace';
+  screenCtx.textAlign = 'left';
+  screenCtx.textBaseline = 'top';
+  screenCtx.fillStyle = 'rgba(0,0,0,0.72)';
+  screenCtx.fillRect(x - 10, y - 8, barW + 20, 48);
+  screenCtx.fillStyle = '#d8f6ff';
+  screenCtx.fillText(`HP ${Math.ceil(health)}/${maxHealth}`, x, y);
+  screenCtx.fillStyle = '#2a2a2a';
+  screenCtx.fillRect(x, y + 24, barW, barH);
+  screenCtx.fillStyle = health > maxHealth * 0.35 ? '#44ff88' : '#ff4a32';
+  screenCtx.fillRect(x, y + 24, barW * (health / maxHealth), barH);
+  screenCtx.strokeStyle = '#d8f6ff';
+  screenCtx.strokeRect(x, y + 24, barW, barH);
+  screenCtx.restore();
+}
+
+function drawGamePhaseOverlay() {
+  if (gamePhase !== 'gameover') return;
+
+  screenCtx.save();
+  screenCtx.fillStyle = 'rgba(0,0,0,0.68)';
+  screenCtx.fillRect(0, 0, canvas.width, canvas.height);
+  screenCtx.textAlign = 'center';
+  screenCtx.textBaseline = 'middle';
+  screenCtx.fillStyle = '#ff4a32';
+  screenCtx.font = 'bold 64px monospace';
+  screenCtx.fillText('MISSION FAILED', canvas.width / 2, canvas.height / 2 - 34);
+  screenCtx.fillStyle = '#d8f6ff';
+  screenCtx.font = '24px monospace';
+  screenCtx.fillText('Press ] or gamepad B to reset', canvas.width / 2, canvas.height / 2 + 34);
+  screenCtx.restore();
+}
+
 function draw() {
   const drawStart = performance.now();
   ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
@@ -994,6 +1193,7 @@ function draw() {
   drawFloor();
   drawWalls();
   drawDoors();
+  drawCorpses();
   drawLamps();
   measurePerf('enemiesMs', drawEnemies);
   drawProjectiles();
@@ -1001,6 +1201,8 @@ function draw() {
   measurePerf('lightingMs', drawLighting);
   measurePerf('fogMs', drawFog);
   drawSoundEvents();
+  drawFireGuide();
+  drawAimAssistReticle();
   drawEnemyLabels();
   drawExfilPoints();
   drawGapExits();
@@ -1019,6 +1221,8 @@ function draw() {
     VIEWPORT_WIDTH * GAME_SCALE,
     VIEWPORT_HEIGHT * GAME_SCALE
   );
+  drawPlayerStatus();
+  drawGamePhaseOverlay();
   drawPerfOverlay();
   recordPerf('drawMs', performance.now() - drawStart);
 }

@@ -51,6 +51,61 @@ the walk-slow lock once Feature 08 lands.
 
 ---
 
+## Aim Focus and Assist Pass
+
+This pass develops hard-aim beyond camera scouting. Hard aim should become a focused firing
+state with a readable tradeoff: the player gains precision and fire prediction, but loses
+peripheral awareness.
+
+### Current Pass
+
+Implement these in order:
+
+1. **Tunnel vision while hard aiming**
+   - Normal player vision cone remains `120` degrees.
+   - Hard aim narrows the player vision cone by `50%`, to `60` degrees.
+   - This affects player vision/fog and vision-gated interaction discovery.
+   - This does not affect enemy vision cones.
+
+1b. **Forward blocker camera clamp**
+   - Hard-aim camera lead should only extend deeply into forward space when the player has an open line.
+   - If the aim ray hits a wall, closed door, or open-door panel directly ahead, clamp the hard-aim camera lead before that blocker.
+   - This prevents hard aim from becoming an indirect way to inspect sound rings or other readability cues beyond a wall.
+   - Normal soft look-ahead can remain unchanged.
+
+2. **Thin fire guide line while hard aiming**
+   - Draw a thin line from the player along the current fire direction while hard aim is held.
+   - The line should use the same direction as projectiles.
+   - The line should stop at the first ray blocker so it previews walls, doors, and open-door panels blocking fire.
+   - Keep this as a readable assist, not a lock-on system.
+
+3. **Hard-aim turn smoothing**
+   - Keep input intent responsive: mouse/right-stick still sets `player.targetAngle`.
+   - While hard aim is held, ease the character/fire direction toward `targetAngle` more slowly than normal.
+   - Normal non-aim turning should stay responsive.
+
+4. **Soft aim magnetism test**
+   - Keep this as soft aim magnetism, not hard lock-on or snapping.
+   - Only active during hard aim.
+   - Only considers living enemies.
+   - Only considers enemies with line of sight from the player.
+   - Only considers targets near the current fire line.
+   - Require the target to be lit/visible enough for the player so magnetism does not become a free enemy detector.
+   - Bias the fire angle gently toward the best target rather than snapping.
+   - Apply full angle bias while the player is actively adjusting aim with mouse movement or right-stick input.
+   - When input stops, fade the angle bias out over a very short release window instead of tracking forever.
+   - After the release window, keep the current fire direction steady.
+   - If the player moves aim away, the target naturally drops out and the assist releases or shifts.
+   - Show a subtle reticle around the assisted target so the player can read when magnetism is engaged.
+   - Slightly brighten/recolor the fire guide while magnetism is engaged.
+
+### Deferred Aim Assist
+
+Do not implement hard lock-on in this pass. If soft magnetism is not enough later, a stronger
+lock-on system should still avoid snapping, hidden targets, and wall/fog detection exploits.
+
+---
+
 ## Proposed Controls
 
 | Input | Effect |
@@ -59,7 +114,7 @@ the walk-slow lock once Feature 08 lands.
 | Gamepad **Left Trigger** (hold) | Enter Hard-Aim: camera pushes forward, player to padded corner |
 | Release Left Trigger | Ease back to soft-centered Look state |
 
-Keyboard/mouse equivalents to be decided during implementation (e.g. hold a key for hard-aim).
+Keyboard/mouse equivalent is right mouse button hold.
 
 ---
 
@@ -72,6 +127,15 @@ Keyboard/mouse equivalents to be decided during implementation (e.g. hold a key 
 | `CAM_CORNER_PADDING` | Margin keeping the player off the screen edge | small, readable margin |
 | `CAM_EASE` | Camera follow/lerp speed | similar feel to `lerpAngle` t=0.18 |
 | `CAM_LOOKAHEAD_EASE` | Normal/hard-aim look-ahead transition speed | smooth, no snap |
+| `CAM_HARDAIM_OCCLUSION_PADDING` | Margin before forward blockers when hard aiming | keep the player from looking past immediate walls/doors |
+| `HARD_AIM_VISION_MULTIPLIER` | Hard-aim player cone multiplier | `0.5` for 60-degree focused vision from the 120-degree base cone |
+| `NORMAL_AIM_TURN_EASE` | Normal facing turn ease | current responsive value |
+| `HARD_AIM_TURN_EASE` | Hard-aim facing turn ease | lower than normal for steadier fire direction |
+| `HARD_AIM_MAGNET_ENABLED` | Enables hard-aim soft magnetism | `true` for test pass; easy to disable |
+| `HARD_AIM_MAGNET_ANGLE` | Max angular distance from fire line | Current test: about 13 degrees; upper-bound test at 20 degrees felt too auto-targeting |
+| `HARD_AIM_MAGNET_RANGE` | Max target distance | Long enough to help room-scale shooting, not whole-map |
+| `HARD_AIM_MAGNET_STRENGTH` | Aim bias strength | Current test: 0.25; upper-bound test at 0.45 felt too auto-targeting |
+| `HARD_AIM_MAGNET_RELEASE_FRAMES` | Frames for magnetism to fade after aim input stops | Current test: 10 frames |
 
 ### Future Tuning Notes
 
@@ -82,6 +146,17 @@ Keyboard/mouse equivalents to be decided during implementation (e.g. hold a key 
 | `CAM_CORNER_PADDING` | `scaleGameUnit(48)` | the player sits too close to the screen edge while hard-aiming | hard-aim does not push the player far enough toward the corner |
 | `CAM_EASE` | `0.18` | the camera feels sluggish while the player moves | the camera feels twitchy or too locked to every small movement |
 | `CAM_LOOKAHEAD_EASE` | `0.16` | aim-direction camera lead feels delayed, especially when entering hard-aim | right-stick turning causes too much camera sway or motion discomfort |
+| `CAM_HARDAIM_OCCLUSION_PADDING` | `scaleGameUnit(48)` | hard aim still peeks too far past blockers | hard aim stops too far before open-feeling thresholds |
+| `HARD_AIM_VISION_MULTIPLIER` | `0.5` | hard aim still gives too much peripheral awareness | hard aim feels too punishing or visually cramped |
+| `HARD_AIM_TURN_EASE` | lower than normal turn ease | hard aim still feels twitchy | hard aim feels unresponsive |
+| `HARD_AIM_MAGNET_ANGLE` | current test: about 13 degrees | assist is too hard to trigger | assist grabs targets too far from intent |
+| `HARD_AIM_MAGNET_STRENGTH` | current test: 0.25 | assist is imperceptible | aim feels automated or sticky |
+| `HARD_AIM_MAGNET_RELEASE_FRAMES` | current test: 10 frames | assist drops too abruptly after input stops | assist keeps tracking too long |
+
+Visual read:
+- When soft magnetism has a target, the assisted enemy gets a small cyan reticle.
+- The fire guide line also becomes brighter/cyan while assist is active.
+- These cues should only appear for the same targets eligible for magnetism.
 
 Useful ratios to preserve:
 - Normal look should be noticeably weaker than hard-aim, roughly one quarter to one third of
@@ -133,8 +208,16 @@ Useful ratios to preserve:
 - Default (Look) state: the camera smoothly follows the player with a small forward bias.
 - Holding Left Trigger eases the camera forward so the player sits in a padded screen corner
   and sees noticeably farther ahead; turning the right stick sweeps that view.
+- Hard-aim camera lead is clamped by the first forward ray blocker so walls/doors cannot be used
+  to scout beyond their far side.
 - Releasing Left Trigger eases smoothly back to the smaller normal-look lead — no snapping.
 - While hard-aiming, the player can still move but only at walk-slow (once Feature 08 exists).
+- While hard-aiming, the player's vision cone narrows by 50%.
+- While hard-aiming, a thin fire guide line previews projectile direction and ray blockers.
+- While hard-aiming, facing/fire direction eases more slowly toward input aim than normal.
+- While hard-aiming near a visible enemy, soft magnetism gently biases fire direction without snapping.
+- Soft magnetism fades out shortly after aim input stops instead of tracking indefinitely.
+- Soft magnetism provides a readable reticle/fire-line cue when it is active.
 - Camera never reveals area outside the map bounds.
 - Collision, vision cones, and LOS behave identically to before (world-space unaffected).
 
