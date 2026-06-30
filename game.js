@@ -96,7 +96,7 @@ const DOORS = DOOR_SPECS.map((door) => ({
   defaultState: 'closed',
   hp: 60,
   maxHp: 60,
-  soundTransmission: 0.75,
+  soundTransmission: 0.8,
   apertureIds: door.apertureIds,
 }));
 
@@ -145,6 +145,19 @@ function measurePerf(key, fn) {
   return result;
 }
 
+const DOOR_LIGHT_APERTURE = {
+  range: 320,
+  intensity: 0.62,
+  falloffPower: 0.7,
+  spreadRadians: 1.1,
+};
+
+const ROOM_LAMP_LIGHT = {
+  radius: 900,
+  intensity: 1.0,
+  falloffPower: 1.45,
+};
+
 
 const MISSION_LIGHTING = {
   globalAmbient: 0.0,
@@ -155,32 +168,32 @@ const MISSION_LIGHTING = {
     { id: 'corridor_right_threshold_spill', x: 778, y: 430, w: 82, h: 44, ambient: 0.06 },
   ],
   lamps: [
-    { x: 200, y:  18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 580, y:  18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 920, y:  18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 200, y: 440, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 580, y: 440, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 920, y: 440, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 350, y: 458, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 700, y: 458, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 350, y: 732, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x: 700, y: 732, wallSide: 'S', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x:  18, y: 630, wallSide: 'W', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
-    { x:1082, y: 590, wallSide: 'E', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 200, y:  18, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 580, y:  18, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 920, y:  18, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 200, y: 440, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 580, y: 440, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 920, y: 440, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 350, y: 458, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 700, y: 458, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 350, y: 732, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x: 700, y: 732, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x:  18, y: 630, wallSide: 'W', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
+    { x:1082, y: 590, wallSide: 'E', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
   ],
   apertures: [
     { id: 'room_a_west_window_moonlight', kind: 'window', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
     { id: 'room_bc_east_window_moonlight', kind: 'window', x: 1082, y: 190, direction: 'W', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
-    { id: 'corridor_left_door_n', kind: 'door', x: 270, y: 440, direction: 'N', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'corridor_left_door_s', kind: 'door', x: 270, y: 458, direction: 'S', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'corridor_right_door_n', kind: 'door', x: 819, y: 440, direction: 'N', width: 82, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'corridor_right_door_s', kind: 'door', x: 819, y: 458, direction: 'S', width: 82, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'room_a_east_door_e', kind: 'door', x: 418, y: 295, direction: 'E', width: 90, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'room_a_east_door_w', kind: 'door', x: 400, y: 295, direction: 'W', width: 90, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'room_bc_divider_door_e', kind: 'door', x: 778, y: 210, direction: 'E', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'room_bc_divider_door_w', kind: 'door', x: 760, y: 210, direction: 'W', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'room_f_west_door_e', kind: 'door', x: 918, y: 590, direction: 'E', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
-    { id: 'room_f_west_door_w', kind: 'door', x: 900, y: 590, direction: 'W', width: 100, range: 160, intensity: 0.10, falloffPower: 1.2, spreadRadians: 0.85, open: false },
+    { id: 'corridor_left_door_n', kind: 'door', x: 270, y: 440, direction: 'N', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'corridor_left_door_s', kind: 'door', x: 270, y: 458, direction: 'S', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'corridor_right_door_n', kind: 'door', x: 819, y: 440, direction: 'N', width: 82, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'corridor_right_door_s', kind: 'door', x: 819, y: 458, direction: 'S', width: 82, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'room_a_east_door_e', kind: 'door', x: 418, y: 295, direction: 'E', width: 90, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'room_a_east_door_w', kind: 'door', x: 400, y: 295, direction: 'W', width: 90, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'room_bc_divider_door_e', kind: 'door', x: 778, y: 210, direction: 'E', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'room_bc_divider_door_w', kind: 'door', x: 760, y: 210, direction: 'W', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'room_f_west_door_e', kind: 'door', x: 918, y: 590, direction: 'E', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
+    { id: 'room_f_west_door_w', kind: 'door', x: 900, y: 590, direction: 'W', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
   ],
 };
 
@@ -429,6 +442,30 @@ function distanceSqToPolygon(poly, x, y) {
   return best;
 }
 
+function playerHasClearView(wx, wy) {
+  if (!inVisionCone(wx, wy)) return false;
+  const angle = Math.atan2(wy - player.y, wx - player.x);
+  const hit = castVisRay(player.x, player.y, angle);
+  if (!hit) return true;
+  const distToTarget = (wx - player.x) ** 2 + (wy - player.y) ** 2;
+  const distToBlocker = (hit.x - player.x) ** 2 + (hit.y - player.y) ** 2;
+  const tolerance = scaleGameUnit(2) ** 2;
+  return distToBlocker + tolerance >= distToTarget;
+}
+
+function isDoorVisibleToPlayer(door) {
+  const closest = closestPointOnRect(door, player.x, player.y);
+  const samples = [
+    closest,
+    { x: door.x + door.w / 2, y: door.y + door.h / 2 },
+    { x: door.x,              y: door.y + door.h / 2 },
+    { x: door.x + door.w,     y: door.y + door.h / 2 },
+    { x: door.x + door.w / 2, y: door.y },
+    { x: door.x + door.w / 2, y: door.y + door.h },
+  ];
+  return samples.some(p => playerHasClearView(p.x, p.y));
+}
+
 function isDoorBlockedByEnemy(door) {
   if (typeof enemies === 'undefined') return false;
   const panel = getOpenDoorPanelCorners(door);
@@ -460,7 +497,15 @@ function toggleNearbyDoor(entity = player) {
   if (!door) return false;
   if (isDoorBlockedByEnemy(door)) return true;
   setDoorState(door, door.state === 'closed' ? 'open' : 'closed');
-  if (typeof emitSound === 'function') emitSound(entity.x, entity.y, scaleGameUnit(120), false);
+  if (typeof emitSound === 'function') {
+    emitSound({
+      x: entity.x,
+      y: entity.y,
+      radius: scaleGameUnit(120),
+      sourceType: 'door',
+      sourceActor: entity,
+    });
+  }
   return true;
 }
 
@@ -487,7 +532,13 @@ function damageDoor(door, amount = DOOR_DAMAGE) {
     door.hp = 0;
     setDoorState(door, 'destroyed');
     if (typeof emitSound === 'function') {
-      emitSound(door.x + door.w / 2, door.y + door.h / 2, scaleGameUnit(240), false);
+      emitSound({
+        x: door.x + door.w / 2,
+        y: door.y + door.h / 2,
+        radius: scaleGameUnit(240),
+        sourceType: 'door',
+        sourceActor: door,
+      });
     }
   } else {
     markDoorLightingDirty();
@@ -793,15 +844,6 @@ function drawDoors() {
       ctx.lineWidth = scaleGameUnit(2);
       ctx.strokeRect(door.x, door.y, door.w, door.h);
 
-      const hpRatio = door.hp / door.maxHp;
-      if (hpRatio < 1) {
-        ctx.fillStyle = 'rgba(255,224,102,0.75)';
-        if (door.orientation === 'horizontal') {
-          ctx.fillRect(door.x, door.y - scaleGameUnit(5), door.w * hpRatio, scaleGameUnit(3));
-        } else {
-          ctx.fillRect(door.x - scaleGameUnit(5), door.y + door.h * (1 - hpRatio), scaleGameUnit(3), door.h * hpRatio);
-        }
-      }
     } else if (door.state === 'open') {
       ctx.fillStyle = '#2b2220';
       ctx.strokeStyle = '#8a6a42';
@@ -858,6 +900,30 @@ function drawCorpses() {
     ctx.arc(0, -8, 10, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.restore();
+  }
+}
+
+function drawDoorHealthBars() {
+  for (const door of DOORS) {
+    if (door.state !== 'closed' || !isDoorVisibleToPlayer(door)) continue;
+    const hpRatio = door.hp / door.maxHp;
+    const barPad = scaleGameUnit(4);
+    const barThickness = scaleGameUnit(4);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(20,18,14,0.88)';
+    if (door.orientation === 'horizontal') {
+      const barY = door.y - barPad - barThickness;
+      ctx.fillRect(door.x, barY, door.w, barThickness);
+      ctx.fillStyle = 'rgba(255,224,102,0.95)';
+      ctx.fillRect(door.x, barY, door.w * hpRatio, barThickness);
+    } else {
+      const barX = door.x - barPad - barThickness;
+      ctx.fillRect(barX, door.y, barThickness, door.h);
+      ctx.fillStyle = 'rgba(255,224,102,0.95)';
+      ctx.fillRect(barX, door.y + door.h * (1 - hpRatio), barThickness, door.h * hpRatio);
+    }
     ctx.restore();
   }
 }
@@ -1200,6 +1266,7 @@ function draw() {
   drawPlayer();
   measurePerf('lightingMs', drawLighting);
   measurePerf('fogMs', drawFog);
+  drawDoorHealthBars();
   drawSoundEvents();
   drawFireGuide();
   drawAimAssistReticle();

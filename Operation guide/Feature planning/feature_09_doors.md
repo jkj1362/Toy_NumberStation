@@ -28,11 +28,11 @@ destroyed door = doorway clear permanently, aperture open permanently
 - Doors should be understandable at a glance: closed blocks, open passes, destroyed cannot be
   closed again.
 - Closed doors block player/enemy/NPC movement and lighting like walls.
-- Future sound attenuation should make closed doors reduce sound less than walls, so soundwaves
-  still travel through them strongly.
+- Sound attenuation makes closed doors reduce sound less than walls, so soundwaves still leak
+  through them at reduced strength.
 - Open doors create believable light leakage between rooms.
 - Destroyable doors use HP so future weapons can also damage them without special casing guns.
-- Door state must be shared by collision, AI, lighting, LOS, and later sound attenuation
+- Door state must be shared by collision, AI, lighting, LOS, and sound attenuation
   instead of being a visual-only flag.
 
 ---
@@ -41,9 +41,9 @@ destroyed door = doorway clear permanently, aperture open permanently
 
 | State | Movement | Light | Sound | Interaction | Damage |
 |-------|----------|-------|-------|-------------|--------|
-| `closed` | Blocks player, AI, NPCs, and projectiles | Doorway blocks rays and disables door apertures | Current sound model is radius-only | Player can open if no enemy occupies door space | Takes damage |
-| `open` | Passage is clear | Apertures enabled; swung panel still blocks rays | Current sound model is radius-only | Player can close if no enemy occupies door/panel space | No damage target in first pass |
-| `destroyed` | Passage is clear | Apertures permanently enabled; no panel blocker | Current sound model is radius-only | Cannot close | Already broken |
+| `closed` | Blocks player, AI, NPCs, and projectiles | Doorway blocks rays and disables door apertures | Leaks sound through `soundTransmission` | Player can open if no enemy occupies door space | Takes damage |
+| `open` | Passage is clear | Apertures enabled; swung panel still blocks rays | No sound attenuation | Player can close if no enemy occupies door/panel space | No damage target in first pass |
+| `destroyed` | Passage is clear | Apertures permanently enabled; no panel blocker | No sound attenuation | Cannot close | Already broken |
 
 Closed doors are treated as temporary walls by blocker-dependent systems. Open doors are not
 movement blockers, but the rotated physical panel is still included in the ray-blocker geometry
@@ -66,7 +66,7 @@ const DOOR_SPECS = [
     w: 100,
     h: 18,
     orientation: 'horizontal',
-    soundTransmission: 0.75,
+    soundTransmission: 0.8,
     apertureIds: ['corridor_left_door_n', 'corridor_left_door_s'],
   },
 ];
@@ -168,22 +168,21 @@ Current first pass:
 
 ## Sound Behavior
 
-Future sound attenuation should not make closed doors mute sound like walls. Doors should reduce
-sound only weakly, so the visible soundwave circle can still communicate that sound travels
-through the door.
+Sound attenuation should not make closed doors mute sound like walls. Doors reduce sound at a
+tunable partial transmission value, so sound still leaks through the door while remaining safer
+than an open passage.
 
-Current prototype sound is radius/event based. Feature 09 did not add acoustic occlusion or
-attenuation.
+Current prototype sound is radius/event based with first-pass line attenuation for AI hearing.
 
 Current behavior:
 
 - Soundwave visuals may continue to draw through doors.
-- Enemy hearing does not currently attenuate through walls or doors.
+- Enemy hearing attenuates through walls and closed doors.
 - Door opening emits a modest sound event.
 - Door destruction emits a louder sound event.
-- Door data still carries `soundTransmission: 0.75` for future sound propagation work.
+- Door data carries `soundTransmission: 0.8` for closed-door sound propagation.
 
-If precise sound occlusion is added later, reuse the same dynamic blocker concept:
+The current sound attenuation uses the same dynamic blocker concept:
 
 ```text
 wall segment = strong attenuation
@@ -323,7 +322,7 @@ rotated ray blocker, while the doorway remains passable.
 5. Done: projectile hits, HP, destruction state, and destruction sound.
 6. Done: door state connected to lighting blockers and aperture open/closed state.
 7. Done first pass: enemies auto-open nearby closed doors when pathing/patrolling reaches them.
-8. Deferred: weak closed-door sound attenuation for enemy hearing.
+8. Done first pass: weak closed-door sound attenuation for enemy hearing.
 9. In progress: manual visual QA/tuning for placement, light leakage, and enemy door behavior.
 
 ---

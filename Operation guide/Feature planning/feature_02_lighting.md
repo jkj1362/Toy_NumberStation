@@ -77,7 +77,7 @@ const missionLighting = {
     { id: 'entry_dim_spill', x: 430, y: 620, w: 140, h: 112, ambient: 0.08 },
   ],
   lamps: [
-    { x: 200, y: 18, wallSide: 'N', radius: 360, intensity: 1.0, falloffPower: 0.85, color: '#ffdc96', active: true },
+    { x: 200, y: 18, wallSide: 'N', radius: 900, intensity: 1.0, falloffPower: 1.45, color: '#ffdc96', active: true },
   ],
   apertures: [
     { id: 'room_a_west_window_moonlight', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, color: '#9bb7d9', open: true },
@@ -118,9 +118,12 @@ rooms intentionally readable despite not being bright.
 For the current Cold War-era atmosphere, keep direct lamp `intensity` near `1.0` so areas
 close to a fixture still read as clearly lit. Control the older, weaker-fixture feeling with
 `radius` and `falloffPower`: radius controls how much of the room an intact fixture can reach,
-while falloff controls how quickly brightness decays from the source. In the default state,
-room lamps should broadly brighten their room; stealth gaps should come from broken lamps,
-corners, occluding geometry, and authored spill/ambient differences.
+while falloff controls how quickly brightness decays from the source. Current wall lamps use
+a broad room-scale radius (`900`) with stronger falloff (`1.45`) so a single fixture can make
+most of its room readable until blocked by geometry, while distant floor space can still become
+dim enough for stealth. In the default state, room lamps should broadly brighten their room;
+stealth gaps should come from broken lamps, corners, occluding geometry, and authored
+spill/ambient differences.
 
 ### Aperture Fields
 

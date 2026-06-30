@@ -13,6 +13,8 @@ The prototype currently has three authored enemies with static and waypoint patr
 - Patrol movement uses scaled coordinates and simple waypoint following.
 - Patrol movement checks dynamic movement blockers.
 - Enemies can auto-open nearby closed doors while moving along patrol/search paths.
+- Doorway waypoints use a wider arrival tolerance so enemies do not need to hit the exact center of tight door gaps.
+- While inside an open doorway's expanded box, enemy movement is constrained to the doorway crossing line; normal flexible steering resumes after leaving the doorway.
 - Moving enemies create visual footstep rings.
 
 ## Current Caveats

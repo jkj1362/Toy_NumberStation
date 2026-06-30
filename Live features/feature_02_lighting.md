@@ -9,6 +9,7 @@ Lighting is a darkness-overlay system with ambient zones, wall lamps, window ape
 - Global ambient light is `0.0`.
 - Ambient zones add low-level spill in selected areas.
 - Twelve wall lamps provide warm radial light and can be shot off.
+- Wall lamp reach is broad enough to light most of a single room until blocked by geometry, with distance falloff preserving dim stealth zones farther from the fixture.
 - Two always-open exterior window apertures add moonlight into Room A and Room B/C.
 - Door apertures are closed by default and open when the linked door is open or destroyed.
 - Static light is cached at reduced resolution and invalidated when lamps or doors change.

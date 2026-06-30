@@ -231,7 +231,14 @@ function updatePlayer(playerInput, activeProjectiles) {
       vy: dy * scalePlayerUnit(25),
       angle: player.angle,
     });
-    emitSound(player.x, player.y, GUNSHOT_RADIUS, true);
+    emitSound({
+      x: player.x,
+      y: player.y,
+      radius: GUNSHOT_RADIUS,
+      isGunshot: true,
+      sourceType: 'player',
+      sourceActor: player,
+    });
   }
 }
 

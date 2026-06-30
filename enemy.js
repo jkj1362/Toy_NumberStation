@@ -33,10 +33,6 @@ const ALERT_FRAMES      = 180;   // 3 s at 60 fps
 const SUSPICION_TIMEOUT = 300;   //  5 s at 60 fps ??no-input timeout for level-1 suspicion
 const REACTION_DELAY    = 45;    // 0.75 s ??window of opportunity before enemy reacts
 const SUSPICION_CONFIRM_DELAY = 75; // 1.25 s ??suspicious stimulus must settle before alert
-const GUNSHOT_RADIUS    = scaleEnemyUnit(350);
-const FOOTSTEP_RADIUS   = scaleEnemyUnit(120);   // max footstep reach at walk speed
-const WALK_SPEED        = scaleEnemyUnit(4);     // player.speed at normal walk; used for footstep scaling
-const SOUND_LIFETIME    = 30;    // frames for visual ring to fade
 const ARRIVAL_RADIUS    = scaleEnemyUnit(8);     // px ??enemy considered "at" a waypoint within this distance
 const ENEMY_RADIUS      = scaleEnemyUnit(16);    // px ??collision radius for pushOutOfWalls during patrol
 const ENEMY_PROJECTILE_HIT_RADIUS = scaleEnemyUnit(18);
@@ -48,6 +44,9 @@ const ENEMY_MELEE_RANGE = scaleEnemyUnit(18);
 const ENEMY_MELEE_COOLDOWN_FRAMES = 60;
 const PLAYER_HIT_FLASH_FRAMES = 18;
 const ENEMY_HIT_FLASH_FRAMES = 10;
+const ENEMY_PLAYER_VISIBILITY_SAMPLE_RADIUS = scaleEnemyUnit(18);
+const ENEMY_DOORWAY_ARRIVAL_RADIUS = scaleEnemyUnit(36);
+const ENEMY_DOORWAY_OPEN_RADIUS = ENEMY_RADIUS + ENEMY_DOORWAY_ARRIVAL_RADIUS;
 
 const STANDARD_VISION = Math.PI * 2 / 3; // 120 deg, matches VISION_ANGLE in player.js
 
@@ -102,6 +101,143 @@ function _pathSegmentClear(x1, y1, x2, y2, radius = ENEMY_RADIUS) {
     if (_pointHitsExpandedWall(x1 + dx * t, y1 + dy * t, radius)) return false;
   }
   return true;
+}
+
+function _pointNearNavGap(x, y) {
+  const gapRadiusSq = ENEMY_DOORWAY_ARRIVAL_RADIUS ** 2;
+  for (const id in NAV_NODES) {
+    if (!id.startsWith('gap_')) continue;
+    const gap = NAV_NODES[id];
+    const dx = x - gap.x;
+    const dy = y - gap.y;
+    if (dx * dx + dy * dy <= gapRadiusSq) return true;
+  }
+  return false;
+}
+
+function _pointNearDoorway(x, y) {
+  if (_pointNearNavGap(x, y)) return true;
+  if (typeof DOORS === 'undefined' || !Array.isArray(DOORS)) return false;
+
+  const doorwayRadiusSq = ENEMY_DOORWAY_ARRIVAL_RADIUS ** 2;
+  for (const door of DOORS) {
+    if (typeof distanceSqToRect === 'function' && distanceSqToRect(door, x, y) <= doorwayRadiusSq) {
+      return true;
+    }
+
+    const cx = door.x + door.w / 2;
+    const cy = door.y + door.h / 2;
+    const dx = x - cx;
+    const dy = y - cy;
+    if (dx * dx + dy * dy <= doorwayRadiusSq) return true;
+  }
+  return false;
+}
+
+function _findDoorwayTransitDoor(x, y) {
+  if (typeof DOORS === 'undefined' || !Array.isArray(DOORS)) return null;
+  let bestDoor = null;
+  let bestD2 = Infinity;
+  const pad = ENEMY_RADIUS * 0.75;
+
+  for (const door of DOORS) {
+    if (door.state !== 'open' && door.state !== 'destroyed') continue;
+    const left = door.x - pad;
+    const right = door.x + door.w + pad;
+    const top = door.y - pad;
+    const bottom = door.y + door.h + pad;
+    if (x < left || x > right || y < top || y > bottom) continue;
+
+    const cx = door.x + door.w / 2;
+    const cy = door.y + door.h / 2;
+    const d2 = (x - cx) ** 2 + (y - cy) ** 2;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestDoor = door;
+    }
+  }
+
+  return bestDoor;
+}
+
+function _doorwayTransitTarget(door, targetX, targetY) {
+  const cx = door.x + door.w / 2;
+  const cy = door.y + door.h / 2;
+
+  if (door.orientation === 'horizontal') {
+    const exitY = targetY >= cy ? door.y + door.h + ENEMY_RADIUS : door.y - ENEMY_RADIUS;
+    return { x: cx, y: exitY };
+  }
+
+  const exitX = targetX >= cx ? door.x + door.w + ENEMY_RADIUS : door.x - ENEMY_RADIUS;
+  return { x: exitX, y: cy };
+}
+
+function _waypointArrivalRadius(wp) {
+  return _pointNearDoorway(wp.x, wp.y) ? ENEMY_DOORWAY_ARRIVAL_RADIUS : ARRIVAL_RADIUS;
+}
+
+function _getEnemyFootstepSoundRadius(e) {
+  if (typeof ENEMY_FOOTSTEP_CUE_RADIUS === 'number') return ENEMY_FOOTSTEP_CUE_RADIUS;
+  if (typeof WALK_SPEED === 'number' && typeof FOOTSTEP_RADIUS === 'number') {
+    return e.proximityRadius + (e.patrolSpeed / WALK_SPEED) * (FOOTSTEP_RADIUS - e.proximityRadius);
+  }
+  return e.proximityRadius;
+}
+
+function _emitEnemyMovementSound(e, moved) {
+  if (!moved || typeof emitSoundEvent !== 'function') return;
+  const interval = typeof ENEMY_FOOTSTEP_CUE_INTERVAL === 'number' ? ENEMY_FOOTSTEP_CUE_INTERVAL : 30;
+  e.enemyFootstepTimer++;
+  if (e.enemyFootstepTimer < interval) return;
+  e.enemyFootstepTimer = 0;
+
+  emitSoundEvent({
+    x: e.x,
+    y: e.y,
+    radius: _getEnemyFootstepSoundRadius(e),
+    sourceType: 'enemy',
+    sourceActor: e,
+    canAlertEnemies: false,
+  });
+}
+
+function _stepEnemyToward(e, targetX, targetY) {
+  if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_DOORWAY_OPEN_RADIUS);
+  const transitDoor = _findDoorwayTransitDoor(e.x, e.y);
+  if (transitDoor) {
+    const transitTarget = _doorwayTransitTarget(transitDoor, targetX, targetY);
+    targetX = transitTarget.x;
+    targetY = transitTarget.y;
+  }
+
+  const dx = targetX - e.x;
+  const dy = targetY - e.y;
+  const d2 = dx * dx + dy * dy;
+  if (d2 <= 0) return { moved: false, stalled: true, closer: false };
+
+  const d = Math.sqrt(d2);
+  const prevX = e.x;
+  const prevY = e.y;
+  e.x += (dx / d) * e.patrolSpeed;
+  e.y += (dy / d) * e.patrolSpeed;
+  e.targetAngle = Math.atan2(dx, -dy);
+  pushOutOfWalls(e, ENEMY_RADIUS);
+  pushOutOfWalls(e, ENEMY_RADIUS);
+
+  const movedDist = Math.hypot(e.x - prevX, e.y - prevY);
+  const newDx = targetX - e.x;
+  const newDy = targetY - e.y;
+  const newD2 = newDx * newDx + newDy * newDy;
+  const minProgressSq = Math.max(0.01, (e.patrolSpeed * 0.25) ** 2);
+  const closer = newD2 < d2 - minProgressSq;
+  const step = {
+    moved: movedDist >= 0.1,
+    stalled: movedDist < 0.1 || !closer,
+    closer,
+  };
+  _emitEnemyMovementSound(e, step.moved);
+  return step;
 }
 
 // Ordered [{x,y}] waypoints through the nav graph. Start and goal are connected
@@ -218,9 +354,7 @@ const INITIAL_ENEMIES = [
 ].map(scaleEnemyConfig);
 
 let enemies      = [];
-let soundEvents  = [];
 let enemyProjectiles = [];
-let footstepTimer = 0;
 let playerHitFlashTimer = 0;
 
 function resetEnemies() {
@@ -261,9 +395,8 @@ function resetEnemies() {
     cautiousTimer:      0,    // >0 = lingering vigilance after a reactive incident
     shotTimer:          e.shotCooldownFrames,
   }));
-  soundEvents.length = 0;
+  if (typeof resetSoundSystem === 'function') resetSoundSystem();
   enemyProjectiles.length = 0;
-  footstepTimer = 0;
   playerHitFlashTimer = 0;
 }
 
@@ -304,55 +437,6 @@ function applySoundReaction(e, sourceX, sourceY) {
   }
 }
 
-// Footstep sound ??per-enemy radius based on the player's current noise scale.
-// Called by game.js each frame the player actually moved.
-function notifyPlayerMoved() {
-  footstepTimer++;
-  if (footstepTimer < 30) return;
-  footstepTimer = 0;
-
-  const noiseScale = typeof player.noiseScale === 'number'
-    ? player.noiseScale
-    : player.speed / WALK_SPEED;
-
-  // Visual ring uses the same effective scale as hearing so the tradeoff is readable.
-  soundEvents.push({ x: player.x, y: player.y, radius: FOOTSTEP_RADIUS * noiseScale, life: SOUND_LIFETIME });
-
-  for (const e of enemies) {
-    // Per-enemy footstep radius: walk reaches FOOTSTEP_RADIUS, sneak is quieter, sprint is louder.
-    const footRadius = e.proximityRadius + noiseScale * (FOOTSTEP_RADIUS - e.proximityRadius);
-    const dx = e.x - player.x, dy = e.y - player.y;
-    if (dx * dx + dy * dy > footRadius * footRadius) continue;
-    applySoundReaction(e, player.x, player.y);
-  }
-}
-
-// Emit a gunshot sound at (x, y).
-// Enemies within GUNSHOT_RADIUS react. If an enemy directly observes the muzzle flash
-// (shot position in their vision cone + LOS), they alert immediately ??no delay, no
-// suspicion phase. Otherwise they hear the shot and go through the two-phase system.
-// Muzzle flash is self-illuminating: isLitByLamps is NOT checked for direct observation.
-function emitSound(x, y, radius, isGunshot = false) {
-  soundEvents.push({ x, y, radius, life: SOUND_LIFETIME });
-
-  for (const e of enemies) {
-    const dx = e.x - x, dy = e.y - y;
-    if (dx * dx + dy * dy > radius * radius) continue;
-
-    if (isGunshot && pawnInCone(e.x, e.y, e.angle, e.visionAngle, x, y) && hasLOS(e.x, e.y, x, y)) {
-      // Direct observation of muzzle flash ??immediate alert
-      e.reactionTimer   = 0;
-      e.pendingReaction = null;
-      e.state      = 'alert';
-      e.alertTimer = ALERT_FRAMES;
-      e.targetAngle = Math.atan2(x - e.x, -(y - e.y));
-      continue;
-    }
-
-    applySoundReaction(e, x, y);
-  }
-}
-
 // Parameterized cone angle check ??not player-coupled
 function pawnInCone(ex, ey, eAngle, visionAngle, tx, ty) {
   const dx = tx - ex, dy = ty - ey;
@@ -374,6 +458,17 @@ function hasLOS(x1, y1, x2, y2) {
   return distToWall >= distToTarget;
 }
 
+function getPlayerVisibilitySamples() {
+  const r = ENEMY_PLAYER_VISIBILITY_SAMPLE_RADIUS;
+  return [
+    { x: player.x,     y: player.y },
+    { x: player.x + r, y: player.y },
+    { x: player.x - r, y: player.y },
+    { x: player.x,     y: player.y + r },
+    { x: player.x,     y: player.y - r },
+  ];
+}
+
 // Step one tick along e.searchPath. Advances index across any waypoints already
 // reached (handles per-frame path rebuilds where the enemy starts at waypoint[0])
 // AND skips waypoints where pushOutOfWalls fully reverted the move (wall-stuck).
@@ -384,20 +479,14 @@ function followNavPath(e) {
     const wp = e.searchPath[e.searchPathIndex];
     const dx = wp.x - e.x, dy = wp.y - e.y;
     const d2 = dx * dx + dy * dy;
-    if (d2 <= ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+    const arrivalRadius = _waypointArrivalRadius(wp);
+    if (d2 <= arrivalRadius * arrivalRadius) {
       e.searchPathIndex++;
       continue;
     }
-    const d = Math.sqrt(d2);
-    const prevX = e.x, prevY = e.y;
-    if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_RADIUS + ARRIVAL_RADIUS);
-    e.x += (dx / d) * e.patrolSpeed;
-    e.y += (dy / d) * e.patrolSpeed;
-    e.targetAngle = Math.atan2(dx, -dy);
-    pushOutOfWalls(e, ENEMY_RADIUS);
-    pushOutOfWalls(e, ENEMY_RADIUS);
-    // Wall fully blocked the move ??abandon this waypoint rather than oscillate against it.
-    if (Math.abs(e.x - prevX) + Math.abs(e.y - prevY) < 0.1) {
+    const step = _stepEnemyToward(e, wp.x, wp.y);
+    // Wall collision blocked or deflected the move; abandon this waypoint rather than oscillate against it.
+    if (step.stalled) {
       e.searchPathIndex++;
       continue;
     }
@@ -460,27 +549,26 @@ function finishReturnToPatrol(e) {
 // Vision cone detection only ??no proximity bubble.
 // Proximity is handled separately with a reaction delay.
 function enemyCanSeeCone(e) {
-  const dx = player.x - e.x, dy = player.y - e.y;
-  const dist2 = dx * dx + dy * dy;
-  if (!isLitByLamps(player.x, player.y)) return false;
-  if (!pawnInCone(e.x, e.y, e.angle, e.visionAngle, player.x, player.y)) return false;
-  if (dist2 > e.sightRange * e.sightRange) return false;
-  return hasLOS(e.x, e.y, player.x, player.y);
+  const sightRangeSq = e.sightRange * e.sightRange;
+  for (const sample of getPlayerVisibilitySamples()) {
+    const dx = sample.x - e.x;
+    const dy = sample.y - e.y;
+    const dist2 = dx * dx + dy * dy;
+    if (dist2 > sightRangeSq) continue;
+    if (!isLitByLamps(sample.x, sample.y)) continue;
+    if (!pawnInCone(e.x, e.y, e.angle, e.visionAngle, sample.x, sample.y)) continue;
+    if (!hasLOS(e.x, e.y, sample.x, sample.y)) continue;
+    return true;
+  }
+  return false;
 }
 
 function moveTowardPlayer(e, pdx, pdy, pd2) {
   if (pd2 <= ARRIVAL_RADIUS * ARRIVAL_RADIUS) return;
 
   if (_pathSegmentClear(e.x, e.y, player.x, player.y)) {
-    const pd = Math.sqrt(pd2);
-    const prevX = e.x, prevY = e.y;
-    if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_RADIUS + ARRIVAL_RADIUS);
-    e.x += (pdx / pd) * e.patrolSpeed;
-    e.y += (pdy / pd) * e.patrolSpeed;
-    e.targetAngle = Math.atan2(pdx, -pdy);
-    pushOutOfWalls(e, ENEMY_RADIUS);
-    pushOutOfWalls(e, ENEMY_RADIUS);
-    if (Math.abs(e.x - prevX) + Math.abs(e.y - prevY) >= 0.1) return;
+    const step = _stepEnemyToward(e, player.x, player.y);
+    if (step.closer) return;
   }
 
   e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
@@ -509,6 +597,17 @@ function fireEnemyShot(e) {
     vy: dy * e.shotSpeed,
     angle: shotAngle,
   });
+
+  if (typeof emitSound === 'function') {
+    emitSound({
+      x: e.x,
+      y: e.y,
+      radius: typeof GUNSHOT_RADIUS === 'number' ? GUNSHOT_RADIUS : scaleEnemyUnit(350),
+      isGunshot: true,
+      sourceType: 'enemy',
+      sourceActor: e,
+    });
+  }
 }
 
 function updateMeleeAlert(e) {
@@ -603,11 +702,7 @@ function tryMeleeAttack(e) {
 }
 
 function updateEnemies() {
-  // Tick sound event lifetimes
-  for (let i = soundEvents.length - 1; i >= 0; i--) {
-    soundEvents[i].life--;
-    if (soundEvents[i].life <= 0) soundEvents.splice(i, 1);
-  }
+  if (typeof updateSoundEvents === 'function') updateSoundEvents();
   updateEnemyProjectiles();
   if (playerHitFlashTimer > 0) playerHitFlashTimer--;
 
@@ -762,25 +857,16 @@ function updateEnemies() {
       const node = e.patrolRoute[e.patrolIndex];
       const dx = node.x - e.x, dy = node.y - e.y;
       const dist2 = dx * dx + dy * dy;
+      const arrivalRadius = _waypointArrivalRadius(node);
 
-      if (dist2 > ARRIVAL_RADIUS * ARRIVAL_RADIUS) {
+      if (dist2 > arrivalRadius * arrivalRadius) {
         // Moving toward node
-        const dist = Math.sqrt(dist2);
-        const prevX = e.x, prevY = e.y;
-        if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_RADIUS + ARRIVAL_RADIUS);
-        e.x += (dx / dist) * e.patrolSpeed;
-        e.y += (dy / dist) * e.patrolSpeed;
-        e.targetAngle = Math.atan2(dx, -dy);
-        pushOutOfWalls(e, ENEMY_RADIUS);
-        pushOutOfWalls(e, ENEMY_RADIUS);
-        // Enemy footstep ring (visual only ??does not alert other enemies)
-        if (e.x !== prevX || e.y !== prevY) {
-          e.enemyFootstepTimer++;
-          if (e.enemyFootstepTimer >= 30) {
-            e.enemyFootstepTimer = 0;
-            const fRadius = e.proximityRadius + (e.patrolSpeed / WALK_SPEED) * (FOOTSTEP_RADIUS - e.proximityRadius);
-            soundEvents.push({ x: e.x, y: e.y, radius: fRadius, life: SOUND_LIFETIME });
-          }
+        const step = _stepEnemyToward(e, node.x, node.y);
+        if (step.stalled && _pointNearDoorway(node.x, node.y) &&
+            Math.abs(node.sweep) === 0 && node.pauseFrames === 0) {
+          e.patrolIndex      = (e.patrolIndex + 1) % e.patrolRoute.length;
+          e.patrolSweepAccum = 0;
+          e.patrolPauseTimer = 0;
         }
       } else {
         // At node ??sweep then pause then advance
@@ -809,23 +895,6 @@ function updateEnemies() {
     if (e.cautiousTimer > 0) e.cautiousTimer--;
     if (e.hitFlashTimer > 0) e.hitFlashTimer--;
     if (e.meleeCooldownTimer > 0) e.meleeCooldownTimer--;
-  }
-}
-
-function drawSoundEvents() {
-  for (const s of soundEvents) {
-    const progress  = 1 - s.life / SOUND_LIFETIME;
-    const r         = s.radius * (0.2 + progress * 0.8);
-    const alpha     = (s.life / SOUND_LIFETIME) * 0.6;
-    const isGunshot = s.radius >= GUNSHOT_RADIUS;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = isGunshot ? '#ffe066' : '#888888';
-    ctx.lineWidth   = scaleEnemyUnit(isGunshot ? 2 : 1);
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
   }
 }
 

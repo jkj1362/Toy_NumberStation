@@ -24,5 +24,6 @@ Movement speed is tied to noise scale so player movement choice affects enemy he
 
 - `player.js`
 - `input.js`
+- `sound.js`
 - `enemy.js`
 - `game.js`
