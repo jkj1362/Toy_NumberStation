@@ -94,9 +94,9 @@ const DOORS = DOOR_SPECS.map((door) => ({
   orientation: door.orientation,
   state: 'closed',
   defaultState: 'closed',
-  hp: 60,
-  maxHp: 60,
-  soundTransmission: 0.8,
+  hp: doorMaxHp(),
+  maxHp: doorMaxHp(),
+  soundTransmission: doorSoundTransmission(),
   apertureIds: door.apertureIds,
 }));
 
@@ -214,6 +214,40 @@ const CORPSE_INTERACT_RADIUS = scaleGameUnit(34);
 const DOOR_DAMAGE = 20;
 const DOOR_OPEN_ANGLE = Math.PI * 5 / 12; // 75 degrees
 
+function gameTunedUnit(key, fallback) {
+  return scaleGameUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
+}
+
+function doorMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorMaxHp', 60) : 60; }
+function doorSoundTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundClosedDoorTransmission', 0.8) : 0.8; }
+function doorDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorDamage', DOOR_DAMAGE) : DOOR_DAMAGE; }
+function doorInteractRadius() { return gameTunedUnit('doorInteractRadius', 45); }
+function doorOpenAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('doorOpenAngleDegrees', 75) : DOOR_OPEN_ANGLE; }
+function interactRadius() { return gameTunedUnit('interactRadius', 30); }
+function exfilRadius() { return gameTunedUnit('exfilRadius', 40); }
+function corpseInteractRadius() { return gameTunedUnit('corpseInteractRadius', 34); }
+function cameraSoftLookaheadDistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('cameraSoftLookaheadDistance', CAM_SOFT_LOOKAHEAD_DIST) : CAM_SOFT_LOOKAHEAD_DIST; }
+function cameraHardAimDistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('cameraHardAimDistance', CAM_HARDAIM_DIST) : CAM_HARDAIM_DIST; }
+function cameraCornerPadding() { return gameTunedUnit('cameraCornerPadding', 48); }
+function cameraHardAimOcclusionPadding() { return gameTunedUnit('cameraHardAimOcclusionPadding', 48); }
+function cameraEase() { return typeof getTuningNumber === 'function' ? getTuningNumber('cameraEase', CAM_EASE) : CAM_EASE; }
+function cameraLookaheadEase() { return typeof getTuningNumber === 'function' ? getTuningNumber('cameraLookaheadEase', CAM_LOOKAHEAD_EASE) : CAM_LOOKAHEAD_EASE; }
+function fogRenderScale() { return typeof getTuningNumber === 'function' ? getTuningNumber('fogRenderScale', FOG_RENDER_SCALE) : FOG_RENDER_SCALE; }
+function showPerfOverlay() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugPerfOverlay') : SHOW_PERF_OVERLAY; }
+function showMapOverlay() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugMapOverlay') : hasMapKnowledge; }
+function showDoorHpBars() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugDoorHpBars') : true; }
+function showSecondaryExfilDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugSecondaryExfil') : true; }
+
+function applyDoorTuning(preserveHealthRatio = true) {
+  const maxHp = doorMaxHp();
+  for (const door of DOORS) {
+    const ratio = door.maxHp > 0 ? door.hp / door.maxHp : 1;
+    door.maxHp = maxHp;
+    door.soundTransmission = doorSoundTransmission();
+    door.hp = preserveHealthRatio ? Math.max(0, Math.min(maxHp, ratio * maxHp)) : maxHp;
+  }
+}
+
 function getClosedDoorRects() {
   return DOORS.filter(door => door.state === 'closed');
 }
@@ -245,7 +279,7 @@ function getOpenDoorPanelCorners(door) {
       { x: door.w, y: door.h / 2 },
       { x: 0, y: door.h / 2 },
     ].map((p) => {
-      const rotated = rotateDoorPoint(p.x, p.y, -DOOR_OPEN_ANGLE);
+      const rotated = rotateDoorPoint(p.x, p.y, -doorOpenAngle());
       return { x: hingeX + rotated.x, y: hingeY + rotated.y };
     });
   }
@@ -258,7 +292,7 @@ function getOpenDoorPanelCorners(door) {
     { x: door.w / 2, y: door.h },
     { x: -door.w / 2, y: door.h },
   ].map((p) => {
-    const rotated = rotateDoorPoint(p.x, p.y, DOOR_OPEN_ANGLE);
+    const rotated = rotateDoorPoint(p.x, p.y, doorOpenAngle());
     return { x: hingeX + rotated.x, y: hingeY + rotated.y };
   });
 }
@@ -386,6 +420,7 @@ function setDoorState(door, state) {
 }
 
 function resetDoors() {
+  applyDoorTuning(false);
   for (const door of DOORS) {
     door.state = door.defaultState;
     door.hp = door.maxHp;
@@ -469,7 +504,7 @@ function isDoorVisibleToPlayer(door) {
 function isDoorBlockedByEnemy(door) {
   if (typeof enemies === 'undefined') return false;
   const panel = getOpenDoorPanelCorners(door);
-  const radius = typeof ENEMY_RADIUS === 'number' ? ENEMY_RADIUS : scaleGameUnit(16);
+  const radius = typeof enemyRadius === 'function' ? enemyRadius() : scaleGameUnit(16);
   const radiusSq = radius * radius;
   for (const enemy of enemies) {
     if (distanceSqToRect(door, enemy.x, enemy.y) <= radiusSq) return true;
@@ -478,7 +513,7 @@ function isDoorBlockedByEnemy(door) {
   return false;
 }
 
-function getNearbyDoor(entity, radius = DOOR_INTERACT_RADIUS) {
+function getNearbyDoor(entity, radius = doorInteractRadius()) {
   let best = null;
   let bestD2 = radius * radius;
   for (const door of DOORS) {
@@ -509,7 +544,7 @@ function toggleNearbyDoor(entity = player) {
   return true;
 }
 
-function openDoorNearEntity(entity, radius = DOOR_INTERACT_RADIUS) {
+function openDoorNearEntity(entity, radius = doorInteractRadius()) {
   const door = getNearbyDoor(entity, radius);
   if (!door || door.state !== 'closed') return false;
   setDoorState(door, 'open');
@@ -525,7 +560,7 @@ function hitDoorAt(x, y) {
   return null;
 }
 
-function damageDoor(door, amount = DOOR_DAMAGE) {
+function damageDoor(door, amount = doorDamage()) {
   if (!door || door.state !== 'closed') return false;
   door.hp -= amount;
   if (door.hp <= 0) {
@@ -558,13 +593,19 @@ function inVisionCone(wx, wy) {
 }
 
 function isLit(wx, wy) {
-  return getLightLevel(wx, wy, { includePlayerGlow: true }) >= PLAYER_VISIBLE_LIGHT_THRESHOLD;
+  const threshold = typeof playerVisibleLightThreshold === 'function'
+    ? playerVisibleLightThreshold()
+    : PLAYER_VISIBLE_LIGHT_THRESHOLD;
+  return getLightLevel(wx, wy, { includePlayerGlow: true }) >= threshold;
 }
 
 // Lamp-only variant — excludes the player's self-glow. Used by enemy detection so
 // the player's ambient light doesn't make them permanently visible to guards.
 function isLitByLamps(wx, wy) {
-  return getLightLevel(wx, wy, { includePlayerGlow: false }) >= ENEMY_BRIGHT_LIGHT_THRESHOLD;
+  const threshold = typeof enemyBrightLightThreshold === 'function'
+    ? enemyBrightLightThreshold()
+    : ENEMY_BRIGHT_LIGHT_THRESHOLD;
+  return getLightLevel(wx, wy, { includePlayerGlow: false }) >= threshold;
     // Half-plane clip — mirrors the rect clip in drawLighting so detection matches visuals
 }
 
@@ -619,15 +660,16 @@ function clamp(v, min, max) {
 function getCameraLookAhead(distance, respectForwardBlocker = false) {
   const dx = Math.sin(player.angle);
   const dy = -Math.cos(player.angle);
-  const maxX = Math.abs(dx) > 0.001 ? (VIEWPORT_WIDTH / 2 - CAM_CORNER_PADDING) / Math.abs(dx) : Infinity;
-  const maxY = Math.abs(dy) > 0.001 ? (VIEWPORT_HEIGHT / 2 - CAM_CORNER_PADDING) / Math.abs(dy) : Infinity;
+  const cornerPadding = cameraCornerPadding();
+  const maxX = Math.abs(dx) > 0.001 ? (VIEWPORT_WIDTH / 2 - cornerPadding) / Math.abs(dx) : Infinity;
+  const maxY = Math.abs(dy) > 0.001 ? (VIEWPORT_HEIGHT / 2 - cornerPadding) / Math.abs(dy) : Infinity;
   let dist = Math.max(0, Math.min(distance, maxX, maxY));
 
   if (respectForwardBlocker) {
     const hit = castVisRay(player.x, player.y, player.angle - Math.PI / 2);
     if (hit) {
       const hitDist = Math.hypot(hit.x - player.x, hit.y - player.y);
-      dist = Math.min(dist, Math.max(0, hitDist - CAM_HARDAIM_OCCLUSION_PADDING));
+      dist = Math.min(dist, Math.max(0, hitDist - cameraHardAimOcclusionPadding()));
     }
   }
 
@@ -642,18 +684,18 @@ function resetCamera() {
 }
 
 function updateCamera(hardAimHeld) {
-  const lookAheadDistance = hardAimHeld ? CAM_HARDAIM_DIST : CAM_SOFT_LOOKAHEAD_DIST;
+  const lookAheadDistance = hardAimHeld ? cameraHardAimDistance() : cameraSoftLookaheadDistance();
   const lookAheadTarget = getCameraLookAhead(lookAheadDistance, hardAimHeld);
-  camera.lookAheadX = lerp(camera.lookAheadX, lookAheadTarget.x, CAM_LOOKAHEAD_EASE);
-  camera.lookAheadY = lerp(camera.lookAheadY, lookAheadTarget.y, CAM_LOOKAHEAD_EASE);
+  camera.lookAheadX = lerp(camera.lookAheadX, lookAheadTarget.x, cameraLookaheadEase());
+  camera.lookAheadY = lerp(camera.lookAheadY, lookAheadTarget.y, cameraLookaheadEase());
 
   let targetX = player.x + camera.lookAheadX - VIEWPORT_WIDTH / 2;
   let targetY = player.y + camera.lookAheadY - VIEWPORT_HEIGHT / 2;
 
   targetX = clamp(targetX, 0, CAMERA_MAX_X);
   targetY = clamp(targetY, 0, CAMERA_MAX_Y);
-  camera.x = lerp(camera.x, targetX, CAM_EASE);
-  camera.y = lerp(camera.y, targetY, CAM_EASE);
+  camera.x = lerp(camera.x, targetX, cameraEase());
+  camera.y = lerp(camera.y, targetY, cameraEase());
 }
 
 function reset() {
@@ -674,13 +716,13 @@ function addCorpse(corpse) {
   corpses.push({
     interactable: true,
     looted: false,
-    interactRadius: CORPSE_INTERACT_RADIUS,
+    interactRadius: corpseInteractRadius(),
     ...corpse,
   });
 }
 
 function addEnemyCorpse(enemy) {
-  const radius = typeof ENEMY_RADIUS === 'number' ? ENEMY_RADIUS : scaleGameUnit(16);
+  const radius = typeof enemyRadius === 'function' ? enemyRadius() : scaleGameUnit(16);
   addCorpse({
     type: 'enemy',
     archetype: enemy.archetype,
@@ -699,11 +741,11 @@ function addPlayerCorpse() {
     x: player.x,
     y: player.y,
     angle: player.angle,
-    radius: PLAYER_RADIUS,
+    radius: typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS,
   });
 }
 
-function getNearbyCorpse(entity = player, radius = CORPSE_INTERACT_RADIUS) {
+function getNearbyCorpse(entity = player, radius = corpseInteractRadius()) {
   let best = null;
   let bestD2 = radius * radius;
   for (const corpse of corpses) {
@@ -756,7 +798,7 @@ function update() {
     }
     if (interactPressed && !doorInteractionHandled) {
       const dx = player.x - pickup.x, dy = player.y - pickup.y;
-      if (dx * dx + dy * dy <= INTERACT_RADIUS * INTERACT_RADIUS) {
+      if (dx * dx + dy * dy <= interactRadius() * interactRadius()) {
         pickup.collected = true;
         gamePhase = 'exfil';
         for (const ef of exfilPoints) { ef.active = true; ef.discovered = true; }
@@ -769,7 +811,7 @@ function update() {
     if (gap.activated) continue;
     if (!inVisionCone(gap.x, gap.y) || !isLit(gap.x, gap.y)) continue;
     const gdx = player.x - gap.x, gdy = player.y - gap.y;
-    if (interactPressed && !doorInteractionHandled && gdx * gdx + gdy * gdy <= INTERACT_RADIUS * INTERACT_RADIUS) {
+    if (interactPressed && !doorInteractionHandled && gdx * gdx + gdy * gdy <= interactRadius() * interactRadius()) {
       gap.activated = true;
       exfilPoints.push({ x: gap.x, y: gap.y, type: 'gap', active: gamePhase === 'exfil', discovered: true });
     }
@@ -779,7 +821,7 @@ function update() {
     for (const ef of exfilPoints) {
       if (!ef.active) continue;
       const dx = player.x - ef.x, dy = player.y - ef.y;
-      if (dx * dx + dy * dy <= EXFIL_RADIUS * EXFIL_RADIUS) {
+      if (dx * dx + dy * dy <= exfilRadius() * exfilRadius()) {
         gamePhase = 'complete';
         setTimeout(reset, 1500);
         break;
@@ -800,8 +842,10 @@ function update() {
       const e = enemies[j];
       const dx = p.x - e.x;
       const dy = p.y - e.y;
-      if (dx * dx + dy * dy <= ENEMY_HIT_RADIUS * ENEMY_HIT_RADIUS) {
-        if (typeof damageEnemy === 'function' && damageEnemy(e, PLAYER_PROJECTILE_DAMAGE)) {
+      const hitRadius = typeof enemyHitRadius === 'function' ? enemyHitRadius() : ENEMY_HIT_RADIUS;
+      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+        const damage = typeof playerProjectileDamage === 'function' ? playerProjectileDamage() : PLAYER_PROJECTILE_DAMAGE;
+        if (typeof damageEnemy === 'function' && damageEnemy(e, damage)) {
           addEnemyCorpse(e);
           enemies.splice(j, 1);
         }
@@ -852,14 +896,14 @@ function drawDoors() {
         const hingeX = door.x;
         const hingeY = door.y + door.h / 2;
         ctx.translate(hingeX, hingeY);
-        ctx.rotate(-DOOR_OPEN_ANGLE);
+        ctx.rotate(-doorOpenAngle());
         ctx.fillRect(0, -door.h / 2, door.w, door.h);
         ctx.strokeRect(0, -door.h / 2, door.w, door.h);
       } else {
         const hingeX = door.x + door.w / 2;
         const hingeY = door.y;
         ctx.translate(hingeX, hingeY);
-        ctx.rotate(DOOR_OPEN_ANGLE);
+        ctx.rotate(doorOpenAngle());
         ctx.fillRect(-door.w / 2, 0, door.w, door.h);
         ctx.strokeRect(-door.w / 2, 0, door.w, door.h);
       }
@@ -905,6 +949,7 @@ function drawCorpses() {
 }
 
 function drawDoorHealthBars() {
+  if (!showDoorHpBars()) return;
   for (const door of DOORS) {
     if (door.state !== 'closed' || !isDoorVisibleToPlayer(door)) continue;
     const hpRatio = door.hp / door.maxHp;
@@ -1063,10 +1108,11 @@ const fogCanvas = document.createElement('canvas');
 const fogCtx = fogCanvas.getContext('2d');
 
 function drawFog() {
-  const PROXIMITY_RADIUS = PLAYER_PROXIMITY_RADIUS;
+  const PROXIMITY_RADIUS = typeof playerProximityRadius === 'function' ? playerProximityRadius() : PLAYER_PROXIMITY_RADIUS;
+  const renderScale = Math.max(1, fogRenderScale());
 
-  const fogWidth = Math.ceil(VIEWPORT_WIDTH / FOG_RENDER_SCALE);
-  const fogHeight = Math.ceil(VIEWPORT_HEIGHT / FOG_RENDER_SCALE);
+  const fogWidth = Math.ceil(VIEWPORT_WIDTH / renderScale);
+  const fogHeight = Math.ceil(VIEWPORT_HEIGHT / renderScale);
   if (fogCanvas.width !== fogWidth || fogCanvas.height !== fogHeight) {
     fogCanvas.width = fogWidth;
     fogCanvas.height = fogHeight;
@@ -1083,9 +1129,9 @@ function drawFog() {
   const visPts = computeVisibilityPolygon(player.x, player.y, player.angle, visionAngle);
   if (visPts.length >= 2) {
     fogCtx.beginPath();
-    fogCtx.moveTo((player.x - camera.x) / FOG_RENDER_SCALE, (player.y - camera.y) / FOG_RENDER_SCALE);
+    fogCtx.moveTo((player.x - camera.x) / renderScale, (player.y - camera.y) / renderScale);
     for (const p of visPts) {
-      fogCtx.lineTo((p.x - camera.x) / FOG_RENDER_SCALE, (p.y - camera.y) / FOG_RENDER_SCALE);
+      fogCtx.lineTo((p.x - camera.x) / renderScale, (p.y - camera.y) / renderScale);
     }
     fogCtx.closePath();
     fogCtx.fill();
@@ -1094,9 +1140,9 @@ function drawFog() {
   // Proximity circle is always visible regardless of facing direction.
   fogCtx.beginPath();
   fogCtx.arc(
-    (player.x - camera.x) / FOG_RENDER_SCALE,
-    (player.y - camera.y) / FOG_RENDER_SCALE,
-    PROXIMITY_RADIUS / FOG_RENDER_SCALE,
+    (player.x - camera.x) / renderScale,
+    (player.y - camera.y) / renderScale,
+    PROXIMITY_RADIUS / renderScale,
     0,
     Math.PI * 2
   );
@@ -1156,11 +1202,13 @@ function drawExfilPoints() {
 
     // Testing: always show secondary location as a dim circle even when undiscovered
     if (ef.type === 'secondary' && !ef.discovered) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-      ctx.lineWidth = scaleGameUnit(2);
-      ctx.beginPath();
-      ctx.arc(ef.x, ef.y, scaleGameUnit(20), 0, Math.PI * 2);
-      ctx.stroke();
+      if (showSecondaryExfilDebug()) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = scaleGameUnit(2);
+        ctx.beginPath();
+        ctx.arc(ef.x, ef.y, scaleGameUnit(20), 0, Math.PI * 2);
+        ctx.stroke();
+      }
       continue;
     }
 
@@ -1184,7 +1232,7 @@ function drawExfilPoints() {
 }
 
 function drawPerfOverlay() {
-  if (!SHOW_PERF_OVERLAY) return;
+  if (!showPerfOverlay()) return;
 
   const lines = [
     `FPS ${perf.fps.toFixed(1)} | steps ${perf.simSteps}`,
@@ -1209,7 +1257,7 @@ function drawPerfOverlay() {
 }
 
 function drawPlayerStatus() {
-  const maxHealth = typeof PLAYER_MAX_HEALTH === 'number' ? PLAYER_MAX_HEALTH : 100;
+  const maxHealth = typeof playerMaxHealth === 'function' ? playerMaxHealth() : (typeof PLAYER_MAX_HEALTH === 'number' ? PLAYER_MAX_HEALTH : 100);
   const health = Math.max(0, player.health ?? maxHealth);
   const barW = 220;
   const barH = 14;
@@ -1274,7 +1322,7 @@ function draw() {
   drawExfilPoints();
   drawGapExits();
   drawPickup();
-  if (hasMapKnowledge) drawMapGeometry();
+  if (hasMapKnowledge && showMapOverlay()) drawMapGeometry();
   ctx.restore();
 
   drawPlayerHitFlash();
@@ -1322,6 +1370,12 @@ function loop(frameTime) {
   draw();
   requestAnimationFrame(loop);
 }
+
+window.addEventListener('tuningchange', (event) => {
+  const key = event.detail?.key;
+  if (!key || !['doorMaxHp', 'soundClosedDoorTransmission'].includes(key)) return;
+  applyDoorTuning(true);
+});
 
 initLighting(MISSION_LIGHTING);
 resetDoors();

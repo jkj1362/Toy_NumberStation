@@ -13,6 +13,7 @@ The player pawn is a top-down character with position, facing angle, collision r
 - Keyboard `C` toggles digital sneak mode on/off.
 - Keyboard `Shift` holds sprint; gamepad face-bottom / button `0` toggles sprint.
 - Mouse position and gamepad right stick control facing direction.
+- Mouse and pointer input that starts on the tuning/debug UI is ignored by game input, so using the panel does not move, aim, or shoot.
 - Right mouse button or gamepad left trigger holds hard aim, which also forces sneak movement.
 - Hard aim narrows the player vision cone from 120 degrees to 60 degrees.
 - Left mouse button or gamepad right trigger fires a projectile along the current facing direction.
@@ -20,6 +21,7 @@ The player pawn is a top-down character with position, facing angle, collision r
 - Keyboard `]` or gamepad `B` resets the mission.
 - Movement is pushed out of current movement blockers, which means walls plus closed doors.
 - Fog is removed only inside the current wall-occluded vision cone and the close proximity circle.
+- The default proximity reveal radius is currently `35` design units and is exposed in the tuning/debug panel.
 
 ## Current Caveats
 

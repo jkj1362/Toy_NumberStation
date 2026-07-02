@@ -17,13 +17,13 @@ function scaleEnemyConfig(e) {
     y: scaleEnemyY(e.y),
     archetype: e.archetype ?? 'melee',
     sightRange: e.sightRange === Infinity ? Infinity : scaleEnemyUnit(e.sightRange),
-    proximityRadius: scaleEnemyUnit(e.proximityRadius),
-    patrolSpeed: scaleEnemyUnit(e.patrolSpeed),
-    shootingRange: scaleEnemyUnit(e.shootingRange ?? 0),
-    shootingRangeTolerance: scaleEnemyUnit(e.shootingRangeTolerance ?? 0),
-    shotSpeed: scaleEnemyUnit(e.shotSpeed ?? 0),
-    shotCooldownFrames: e.shotCooldownFrames ?? 0,
-    aimSpreadRadians: e.aimSpreadRadians ?? 0,
+    proximityRadius: enemyProximityRadius(),
+    patrolSpeed: enemyPatrolSpeed(),
+    shootingRange: e.archetype === 'shooter' ? enemyShootingRange() : scaleEnemyUnit(e.shootingRange ?? 0),
+    shootingRangeTolerance: e.archetype === 'shooter' ? enemyShootingRangeTolerance() : scaleEnemyUnit(e.shootingRangeTolerance ?? 0),
+    shotSpeed: e.archetype === 'shooter' ? enemyShotSpeed() : scaleEnemyUnit(e.shotSpeed ?? 0),
+    shotCooldownFrames: e.archetype === 'shooter' ? enemyShotCooldownFrames() : (e.shotCooldownFrames ?? 0),
+    aimSpreadRadians: e.archetype === 'shooter' ? enemyAimSpreadRadians() : (e.aimSpreadRadians ?? 0),
     patrolRoute: e.patrolRoute.map(scaleEnemyPoint),
   };
 }
@@ -53,6 +53,42 @@ const STANDARD_VISION = Math.PI * 2 / 3; // 120 deg, matches VISION_ANGLE in pla
 const SEARCH_SWEEP_RATE = 0.016; // 270째 over ~5 s at 60 fps
 const CAUTIOUS_FRAMES   = 1800;  // 30 s ??lingering vigilance after returning to patrol
 
+function enemyTunedUnit(key, fallback) {
+  return scaleEnemyUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
+}
+
+function enemyAlertFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyAlertFrames', ALERT_FRAMES) : ALERT_FRAMES; }
+function enemySuspicionTimeout() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySuspicionTimeout', SUSPICION_TIMEOUT) : SUSPICION_TIMEOUT; }
+function enemyReactionDelay() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyReactionDelay', REACTION_DELAY) : REACTION_DELAY; }
+function enemySuspicionConfirmDelay() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySuspicionConfirmDelay', SUSPICION_CONFIRM_DELAY) : SUSPICION_CONFIRM_DELAY; }
+function enemyArrivalRadius() { return enemyTunedUnit('enemyArrivalRadius', 8); }
+function enemyRadius() { return enemyTunedUnit('enemyRadius', 16); }
+function enemyHitRadius() { return enemyTunedUnit('enemyHitRadius', 20); }
+function enemyProjectileHitRadius() { return enemyTunedUnit('enemyProjectileHitRadius', 18); }
+function enemyProjectileSpawnOffset() { return scaleEnemyUnit(20); }
+function enemyMaxHealth() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyMaxHealth', ENEMY_MAX_HEALTH) : ENEMY_MAX_HEALTH; }
+function enemyProjectileDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyProjectileDamage', ENEMY_PROJECTILE_DAMAGE) : ENEMY_PROJECTILE_DAMAGE; }
+function enemyMeleeDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyMeleeDamage', ENEMY_MELEE_DAMAGE) : ENEMY_MELEE_DAMAGE; }
+function enemyMeleeRange() { return enemyTunedUnit('enemyMeleeRange', 18); }
+function enemyMeleeCooldownFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyMeleeCooldownFrames', ENEMY_MELEE_COOLDOWN_FRAMES) : ENEMY_MELEE_COOLDOWN_FRAMES; }
+function playerHitFlashFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerHitFlashFrames', PLAYER_HIT_FLASH_FRAMES) : PLAYER_HIT_FLASH_FRAMES; }
+function enemyHitFlashFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyHitFlashFrames', ENEMY_HIT_FLASH_FRAMES) : ENEMY_HIT_FLASH_FRAMES; }
+function enemyPlayerVisibilitySampleRadius() { return enemyTunedUnit('enemyPlayerVisibilitySampleRadius', 18); }
+function enemyDoorwayArrivalRadius() { return enemyTunedUnit('enemyDoorwayArrivalRadius', 36); }
+function enemyDoorwayOpenRadius() { return enemyRadius() + enemyDoorwayArrivalRadius(); }
+function enemyVisionAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('enemyVisionAngleDegrees', 120) : STANDARD_VISION; }
+function enemyProximityRadius() { return enemyTunedUnit('enemyProximityRadius', 50); }
+function enemyPatrolSpeed() { return enemyTunedUnit('enemyPatrolSpeed', 1.5); }
+function enemyShootingRange() { return enemyTunedUnit('enemyShootingRange', 360); }
+function enemyShootingRangeTolerance() { return enemyTunedUnit('enemyShootingRangeTolerance', 40); }
+function enemyShotCooldownFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyShotCooldownFrames', 75) : 75; }
+function enemyShotSpeed() { return enemyTunedUnit('enemyShotSpeed', 25); }
+function enemyAimSpreadRadians() { return typeof getTuningRadians === 'function' ? getTuningRadians('enemyAimSpreadDegrees', 9) : 0.16; }
+function enemySearchSweepRate() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySearchSweepRate', SEARCH_SWEEP_RATE) : SEARCH_SWEEP_RATE; }
+function enemyCautiousFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyCautiousFrames', CAUTIOUS_FRAMES) : CAUTIOUS_FRAMES; }
+function showEnemySightDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugEnemySight') : true; }
+function showEnemyLabelsDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugEnemyLabels') : true; }
+
 // Reactive navigation graph ??used by SEARCHING state to path to lastKnownX/Y.
 // Patrol routes use hand-placed waypoints; this graph is only for buildPath().
 const NAV_NODES = Object.fromEntries(Object.entries({
@@ -80,7 +116,7 @@ const NAV_EDGES = [
   ['gap_room_bc',    'room_bc'],
 ];
 
-function _pointHitsExpandedWall(x, y, radius = ENEMY_RADIUS) {
+function _pointHitsExpandedWall(x, y, radius = enemyRadius()) {
   const blockers = typeof getMovementBlockers === 'function' ? getMovementBlockers() : WALLS;
   for (const wall of blockers) {
     if (x > wall.x - radius && x < wall.x + wall.w + radius &&
@@ -91,7 +127,7 @@ function _pointHitsExpandedWall(x, y, radius = ENEMY_RADIUS) {
   return false;
 }
 
-function _pathSegmentClear(x1, y1, x2, y2, radius = ENEMY_RADIUS) {
+function _pathSegmentClear(x1, y1, x2, y2, radius = enemyRadius()) {
   const dx = x2 - x1;
   const dy = y2 - y1;
   const dist = Math.sqrt(dx * dx + dy * dy);
@@ -104,7 +140,7 @@ function _pathSegmentClear(x1, y1, x2, y2, radius = ENEMY_RADIUS) {
 }
 
 function _pointNearNavGap(x, y) {
-  const gapRadiusSq = ENEMY_DOORWAY_ARRIVAL_RADIUS ** 2;
+  const gapRadiusSq = enemyDoorwayArrivalRadius() ** 2;
   for (const id in NAV_NODES) {
     if (!id.startsWith('gap_')) continue;
     const gap = NAV_NODES[id];
@@ -119,7 +155,7 @@ function _pointNearDoorway(x, y) {
   if (_pointNearNavGap(x, y)) return true;
   if (typeof DOORS === 'undefined' || !Array.isArray(DOORS)) return false;
 
-  const doorwayRadiusSq = ENEMY_DOORWAY_ARRIVAL_RADIUS ** 2;
+  const doorwayRadiusSq = enemyDoorwayArrivalRadius() ** 2;
   for (const door of DOORS) {
     if (typeof distanceSqToRect === 'function' && distanceSqToRect(door, x, y) <= doorwayRadiusSq) {
       return true;
@@ -138,7 +174,7 @@ function _findDoorwayTransitDoor(x, y) {
   if (typeof DOORS === 'undefined' || !Array.isArray(DOORS)) return null;
   let bestDoor = null;
   let bestD2 = Infinity;
-  const pad = ENEMY_RADIUS * 0.75;
+  const pad = enemyRadius() * 0.75;
 
   for (const door of DOORS) {
     if (door.state !== 'open' && door.state !== 'destroyed') continue;
@@ -165,20 +201,20 @@ function _doorwayTransitTarget(door, targetX, targetY) {
   const cy = door.y + door.h / 2;
 
   if (door.orientation === 'horizontal') {
-    const exitY = targetY >= cy ? door.y + door.h + ENEMY_RADIUS : door.y - ENEMY_RADIUS;
+    const exitY = targetY >= cy ? door.y + door.h + enemyRadius() : door.y - enemyRadius();
     return { x: cx, y: exitY };
   }
 
-  const exitX = targetX >= cx ? door.x + door.w + ENEMY_RADIUS : door.x - ENEMY_RADIUS;
+  const exitX = targetX >= cx ? door.x + door.w + enemyRadius() : door.x - enemyRadius();
   return { x: exitX, y: cy };
 }
 
 function _waypointArrivalRadius(wp) {
-  return _pointNearDoorway(wp.x, wp.y) ? ENEMY_DOORWAY_ARRIVAL_RADIUS : ARRIVAL_RADIUS;
+  return _pointNearDoorway(wp.x, wp.y) ? enemyDoorwayArrivalRadius() : enemyArrivalRadius();
 }
 
 function _getEnemyFootstepSoundRadius(e) {
-  if (typeof ENEMY_FOOTSTEP_CUE_RADIUS === 'number') return ENEMY_FOOTSTEP_CUE_RADIUS;
+  if (typeof enemyFootstepCueRadius === 'function') return enemyFootstepCueRadius();
   if (typeof WALK_SPEED === 'number' && typeof FOOTSTEP_RADIUS === 'number') {
     return e.proximityRadius + (e.patrolSpeed / WALK_SPEED) * (FOOTSTEP_RADIUS - e.proximityRadius);
   }
@@ -187,7 +223,7 @@ function _getEnemyFootstepSoundRadius(e) {
 
 function _emitEnemyMovementSound(e, moved) {
   if (!moved || typeof emitSoundEvent !== 'function') return;
-  const interval = typeof ENEMY_FOOTSTEP_CUE_INTERVAL === 'number' ? ENEMY_FOOTSTEP_CUE_INTERVAL : 30;
+  const interval = typeof enemyFootstepCueInterval === 'function' ? enemyFootstepCueInterval() : 30;
   e.enemyFootstepTimer++;
   if (e.enemyFootstepTimer < interval) return;
   e.enemyFootstepTimer = 0;
@@ -203,7 +239,7 @@ function _emitEnemyMovementSound(e, moved) {
 }
 
 function _stepEnemyToward(e, targetX, targetY) {
-  if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, ENEMY_DOORWAY_OPEN_RADIUS);
+  if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, enemyDoorwayOpenRadius());
   const transitDoor = _findDoorwayTransitDoor(e.x, e.y);
   if (transitDoor) {
     const transitTarget = _doorwayTransitTarget(transitDoor, targetX, targetY);
@@ -222,8 +258,8 @@ function _stepEnemyToward(e, targetX, targetY) {
   e.x += (dx / d) * e.patrolSpeed;
   e.y += (dy / d) * e.patrolSpeed;
   e.targetAngle = Math.atan2(dx, -dy);
-  pushOutOfWalls(e, ENEMY_RADIUS);
-  pushOutOfWalls(e, ENEMY_RADIUS);
+  pushOutOfWalls(e, enemyRadius());
+  pushOutOfWalls(e, enemyRadius());
 
   const movedDist = Math.hypot(e.x - prevX, e.y - prevY);
   const newDx = targetX - e.x;
@@ -357,6 +393,27 @@ let enemies      = [];
 let enemyProjectiles = [];
 let playerHitFlashTimer = 0;
 
+function applyEnemyTuning(e) {
+  if (!e) return;
+  e.visionAngle = enemyVisionAngle();
+  e.proximityRadius = enemyProximityRadius();
+  e.patrolSpeed = enemyPatrolSpeed();
+  e.maxHealth = enemyMaxHealth();
+  e.health = Math.min(e.health, e.maxHealth);
+  if (e.archetype === 'shooter' || e.archetype === 'precision') {
+    e.shootingRange = enemyShootingRange();
+    e.shootingRangeTolerance = enemyShootingRangeTolerance();
+    e.shotCooldownFrames = enemyShotCooldownFrames();
+    e.shotSpeed = enemyShotSpeed();
+    e.aimSpreadRadians = enemyAimSpreadRadians();
+    e.shotTimer = Math.min(e.shotTimer, e.shotCooldownFrames);
+  }
+}
+
+function applyEnemyTuningToAll() {
+  for (const enemy of enemies) applyEnemyTuning(enemy);
+}
+
 function resetEnemies() {
   enemies = INITIAL_ENEMIES.map((e, i) => ({
     ...e,
@@ -378,8 +435,8 @@ function resetEnemies() {
     patrolPauseTimer:   0,    // counts up; node done when it reaches node.pauseFrames
     patrolSweepAccum:   0,    // accumulated |rotation| at current node
     enemyFootstepTimer: 0,    // counts up; emits footstep every 30 frames while moving
-    maxHealth:          e.maxHealth ?? ENEMY_MAX_HEALTH,
-    health:             e.maxHealth ?? ENEMY_MAX_HEALTH,
+    maxHealth:          enemyMaxHealth(),
+    health:             enemyMaxHealth(),
     alive:              true,
     hitFlashTimer:      0,
     meleeCooldownTimer: 0,
@@ -395,6 +452,7 @@ function resetEnemies() {
     cautiousTimer:      0,    // >0 = lingering vigilance after a reactive incident
     shotTimer:          e.shotCooldownFrames,
   }));
+  applyEnemyTuningToAll();
   if (typeof resetSoundSystem === 'function') resetSoundSystem();
   enemyProjectiles.length = 0;
   playerHitFlashTimer = 0;
@@ -403,13 +461,13 @@ function resetEnemies() {
 function damageEnemy(e, amount) {
   if (!e || e.health <= 0 || e.alive === false) return true;
   e.health = Math.max(0, e.health - amount);
-  e.hitFlashTimer = ENEMY_HIT_FLASH_FRAMES;
+  e.hitFlashTimer = enemyHitFlashFrames();
   if (e.health <= 0) e.alive = false;
   return e.health <= 0;
 }
 
 // Queue a delayed state change. Does nothing if already reacting (existing pending wins).
-function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = REACTION_DELAY) {
+function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = enemyReactionDelay()) {
   if (e.reactionTimer > 0) return;
   e.reactionTimer   = delayFrames;
   e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY };
@@ -424,16 +482,16 @@ function applySoundReaction(e, sourceX, sourceY) {
   } else if (e.state === 'suspicious') {
     // Second sound while suspicious ??confirmed alert after a short lock-on delay.
     e.targetAngle = angle;
-    scheduleReaction(e, 'alert', angle, sourceX, sourceY, SUSPICION_CONFIRM_DELAY);
+    scheduleReaction(e, 'alert', angle, sourceX, sourceY, enemySuspicionConfirmDelay());
   } else if (e.state === 'searching' || e.state === 'returning' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
     // Already on edge ??any sound snaps straight to alert, skipping suspicion delay
     e.reactionTimer   = 0;
     e.pendingReaction = null;
     e.state      = 'alert';
-    e.alertTimer = ALERT_FRAMES;
+    e.alertTimer = enemyAlertFrames();
     e.targetAngle = angle;
   } else if (e.state === 'alert') {
-    e.alertTimer = ALERT_FRAMES; // refresh
+    e.alertTimer = enemyAlertFrames(); // refresh
   }
 }
 
@@ -459,7 +517,7 @@ function hasLOS(x1, y1, x2, y2) {
 }
 
 function getPlayerVisibilitySamples() {
-  const r = ENEMY_PLAYER_VISIBILITY_SAMPLE_RADIUS;
+  const r = enemyPlayerVisibilitySampleRadius();
   return [
     { x: player.x,     y: player.y },
     { x: player.x + r, y: player.y },
@@ -543,7 +601,7 @@ function finishReturnToPatrol(e) {
   e.patrolSweepAccum = 0;
   e.reactionTimer = 0;
   e.pendingReaction = null;
-  e.cautiousTimer = CAUTIOUS_FRAMES;
+  e.cautiousTimer = enemyCautiousFrames();
 }
 
 // Vision cone detection only ??no proximity bubble.
@@ -564,7 +622,7 @@ function enemyCanSeeCone(e) {
 }
 
 function moveTowardPlayer(e, pdx, pdy, pd2) {
-  if (pd2 <= ARRIVAL_RADIUS * ARRIVAL_RADIUS) return;
+  if (pd2 <= enemyArrivalRadius() * enemyArrivalRadius()) return;
 
   if (_pathSegmentClear(e.x, e.y, player.x, player.y)) {
     const step = _stepEnemyToward(e, player.x, player.y);
@@ -578,7 +636,7 @@ function moveTowardPlayer(e, pdx, pdy, pd2) {
 
 function canShootPlayer(e) {
   if (!hasLOS(e.x, e.y, player.x, player.y)) return false;
-  return _pathSegmentClear(e.x, e.y, player.x, player.y, ENEMY_PROJECTILE_HIT_RADIUS);
+  return _pathSegmentClear(e.x, e.y, player.x, player.y, enemyProjectileHitRadius());
 }
 
 function fireEnemyShot(e) {
@@ -591,8 +649,8 @@ function fireEnemyShot(e) {
   const dy = -Math.cos(shotAngle);
 
   enemyProjectiles.push({
-    x: e.x + dx * ENEMY_PROJECTILE_SPAWN_OFFSET,
-    y: e.y + dy * ENEMY_PROJECTILE_SPAWN_OFFSET,
+    x: e.x + dx * enemyProjectileSpawnOffset(),
+    y: e.y + dy * enemyProjectileSpawnOffset(),
     vx: dx * e.shotSpeed,
     vy: dy * e.shotSpeed,
     angle: shotAngle,
@@ -602,7 +660,7 @@ function fireEnemyShot(e) {
     emitSound({
       x: e.x,
       y: e.y,
-      radius: typeof GUNSHOT_RADIUS === 'number' ? GUNSHOT_RADIUS : scaleEnemyUnit(350),
+      radius: typeof soundGunshotRadius === 'function' ? soundGunshotRadius() : scaleEnemyUnit(350),
       isGunshot: true,
       sourceType: 'enemy',
       sourceActor: e,
@@ -663,12 +721,13 @@ function updateEnemyProjectiles() {
 
     const dx = p.x - player.x;
     const dy = p.y - player.y;
-    const hitPlayer = dx * dx + dy * dy <= (PLAYER_RADIUS + ENEMY_PROJECTILE_HIT_RADIUS) ** 2;
+    const playerHitRadius = typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS;
+    const hitPlayer = dx * dx + dy * dy <= (playerHitRadius + enemyProjectileHitRadius()) ** 2;
     const outOfBounds = p.x < 0 || p.x > ENEMY_GAME_WIDTH || p.y < 0 || p.y > ENEMY_GAME_HEIGHT;
 
     if (hitPlayer) {
-      playerHitFlashTimer = PLAYER_HIT_FLASH_FRAMES;
-      if (typeof damagePlayer === 'function' && damagePlayer(ENEMY_PROJECTILE_DAMAGE, { type: 'projectile' }) &&
+      playerHitFlashTimer = playerHitFlashFrames();
+      if (typeof damagePlayer === 'function' && damagePlayer(enemyProjectileDamage(), { type: 'projectile' }) &&
           typeof setGameOver === 'function') {
         setGameOver();
       }
@@ -690,12 +749,13 @@ function tryMeleeAttack(e) {
   if (e.meleeCooldownTimer > 0) return;
   const dx = player.x - e.x;
   const dy = player.y - e.y;
-  const hitRange = PLAYER_RADIUS + ENEMY_RADIUS + ENEMY_MELEE_RANGE;
+  const playerHitRadius = typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS;
+  const hitRange = playerHitRadius + enemyRadius() + enemyMeleeRange();
   if (dx * dx + dy * dy > hitRange * hitRange) return;
 
-  e.meleeCooldownTimer = ENEMY_MELEE_COOLDOWN_FRAMES;
-  playerHitFlashTimer = PLAYER_HIT_FLASH_FRAMES;
-  if (typeof damagePlayer === 'function' && damagePlayer(ENEMY_MELEE_DAMAGE, { type: 'melee' }) &&
+  e.meleeCooldownTimer = enemyMeleeCooldownFrames();
+  playerHitFlashTimer = playerHitFlashFrames();
+  if (typeof damagePlayer === 'function' && damagePlayer(enemyMeleeDamage(), { type: 'melee' }) &&
       typeof setGameOver === 'function') {
     setGameOver();
   }
@@ -732,7 +792,7 @@ function updateEnemies() {
             e.suspicionPhase = 'turning';
           }
         }
-        if (e.state === 'alert') e.alertTimer = ALERT_FRAMES;
+        if (e.state === 'alert') e.alertTimer = enemyAlertFrames();
         e.pendingReaction = null;
       }
     }
@@ -746,12 +806,12 @@ function updateEnemies() {
       e.lastKnownY = player.y;
 
       if (e.state === 'suspicious') {
-        scheduleReaction(e, 'alert', angle, player.x, player.y, SUSPICION_CONFIRM_DELAY);
+        scheduleReaction(e, 'alert', angle, player.x, player.y, enemySuspicionConfirmDelay());
       } else {
         e.reactionTimer   = 0;
         e.pendingReaction = null;
         e.state      = 'alert';
-        e.alertTimer = ALERT_FRAMES;
+        e.alertTimer = enemyAlertFrames();
       }
     }
     // 3. Delayed: proximity detection ??only when not already reacting or alert
@@ -768,12 +828,12 @@ function updateEnemies() {
       e.suspicionTimer++;
 
       if (e.suspicionPhase === 'turning') {
-        if (e.suspicionTimer >= SUSPICION_TIMEOUT) {
+        if (e.suspicionTimer >= enemySuspicionTimeout()) {
           e.state = 'patrol';
           e.targetAngle = e.suspicionOriginalAngle; // restore original facing
           e.reactionTimer = 0;
           e.pendingReaction = null;
-          e.cautiousTimer = CAUTIOUS_FRAMES;
+          e.cautiousTimer = enemyCautiousFrames();
         }
 
       } else if (e.suspicionPhase === 'moving') {
@@ -783,7 +843,7 @@ function updateEnemies() {
           e.suspicionSearchAccum = 0;
         }
         // Failsafe: if stuck moving too long, skip to return
-        if (e.suspicionTimer >= SUSPICION_TIMEOUT * 3) {
+        if (e.suspicionTimer >= enemySuspicionTimeout() * 3) {
           e.suspicionPhase  = 'returning';
           e.searchPath      = buildPath(e.x, e.y, e.suspicionReturnX, e.suspicionReturnY);
           e.searchPathIndex = 0;
@@ -806,7 +866,7 @@ function updateEnemies() {
           e.targetAngle = e.suspicionOriginalAngle;
           e.reactionTimer = 0;
           e.pendingReaction = null;
-          e.cautiousTimer = CAUTIOUS_FRAMES;
+          e.cautiousTimer = enemyCautiousFrames();
         }
       }
       // Path B (sight while suspicious) handled by step 2: as enemy turns/moves, if player
@@ -814,7 +874,7 @@ function updateEnemies() {
     }
 
     // 5. Alert pursuit + countdown.
-    // Step 2 has already pinned alertTimer to ALERT_FRAMES this frame if player is visible,
+    // Step 2 has already pinned alertTimer to enemyAlertFrames() this frame if player is visible,
     // so the decrement below cannot expire while LOS holds.
     if (e.state === 'alert') {
       updateAlertBehavior(e);
@@ -836,8 +896,8 @@ function updateEnemies() {
     // Sight re-acquisition during search is handled by step 2 (overrides to alert).
     if (e.state === 'searching') {
       if (followNavPath(e)) {
-        e.targetAngle      += SEARCH_SWEEP_RATE;
-        e.searchSweepAccum += SEARCH_SWEEP_RATE;
+        e.targetAngle      += enemySearchSweepRate();
+        e.searchSweepAccum += enemySearchSweepRate();
         // Sweep done with no re-acquisition ??path back to patrol/home before resuming.
         if (e.searchSweepAccum >= Math.PI * 1.5) {
           beginReturnToPatrol(e);
@@ -901,7 +961,7 @@ function updateEnemies() {
 function drawPlayerHitFlash() {
   if (playerHitFlashTimer > 0) {
     ctx.save();
-    ctx.globalAlpha = 0.22 * (playerHitFlashTimer / PLAYER_HIT_FLASH_FRAMES);
+    ctx.globalAlpha = 0.22 * (playerHitFlashTimer / playerHitFlashFrames());
     ctx.fillStyle = '#ff3333';
     ctx.fillRect(0, 0, ENEMY_GAME_WIDTH, ENEMY_GAME_HEIGHT);
     ctx.restore();
@@ -952,8 +1012,10 @@ function drawEnemySightCone(e) {
 }
 
 function drawEnemies() {
-  for (const e of enemies) {
-    drawEnemySightCone(e);
+  if (showEnemySightDebug()) {
+    for (const e of enemies) {
+      drawEnemySightCone(e);
+    }
   }
 
   for (const e of enemies) {
@@ -965,8 +1027,8 @@ function drawEnemies() {
     // Reaction delay ring ??contracting white circle shows the opportunity window
     if (isReacting) {
       const reactionDelay = e.state === 'suspicious' && e.pendingReaction?.state === 'alert'
-        ? SUSPICION_CONFIRM_DELAY
-        : REACTION_DELAY;
+        ? enemySuspicionConfirmDelay()
+        : enemyReactionDelay();
       const progress = e.reactionTimer / reactionDelay; // 1 ??0 as timer counts down
       const ringR    = e.proximityRadius * progress;
       ctx.save();
@@ -1049,6 +1111,7 @@ function drawEnemies() {
 
 // Always-visible debug number labels ??drawn after fog in game.js so they show through darkness
 function drawEnemyLabels() {
+  if (!showEnemyLabelsDebug()) return;
   for (const e of enemies) {
     ctx.save();
     ctx.font = `bold ${scaleEnemyUnit(13)}px monospace`;
@@ -1066,5 +1129,9 @@ function drawEnemyLabels() {
     ctx.restore();
   }
 }
+
+window.addEventListener('tuningchange', () => {
+  applyEnemyTuningToAll();
+});
 
 resetEnemies();

@@ -19,6 +19,27 @@ let staticLightSourceCanvas = document.createElement('canvas');
 let staticLightSourceCtx = staticLightSourceCanvas.getContext('2d');
 let staticLightDirty = true;
 let staticLightImageData = null;
+let currentMissionLighting = null;
+
+function lightingTunedUnit(key, fallback) {
+  return scaleGameUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
+}
+
+function tunedGlobalAmbient(fallback = LIGHT_GLOBAL_AMBIENT) {
+  return clampLight(typeof getTuningNumber === 'function' ? getTuningNumber('globalAmbient', fallback) : fallback);
+}
+
+function playerVisibleLightThreshold() {
+  return typeof getTuningNumber === 'function'
+    ? getTuningNumber('playerVisibleLightThreshold', PLAYER_VISIBLE_LIGHT_THRESHOLD)
+    : PLAYER_VISIBLE_LIGHT_THRESHOLD;
+}
+
+function enemyBrightLightThreshold() {
+  return typeof getTuningNumber === 'function'
+    ? getTuningNumber('enemyBrightLightThreshold', ENEMY_BRIGHT_LIGHT_THRESHOLD)
+    : ENEMY_BRIGHT_LIGHT_THRESHOLD;
+}
 
 function clampLight(v) {
   return Math.max(0, Math.min(1, v));
@@ -63,7 +84,8 @@ function scaleLightingAperture(aperture) {
 }
 
 function initLighting(missionLighting) {
-  lightingGlobalAmbient = clampLight(missionLighting.globalAmbient ?? LIGHT_GLOBAL_AMBIENT);
+  currentMissionLighting = missionLighting;
+  lightingGlobalAmbient = tunedGlobalAmbient(missionLighting.globalAmbient ?? LIGHT_GLOBAL_AMBIENT);
   lightingZones = (missionLighting.zones ?? []).map(zone => ({
     ...scaleLightingRect(zone),
     ambient: clampLight(zone.ambient ?? 0),
@@ -76,6 +98,7 @@ function initLighting(missionLighting) {
   for (const aperture of lightingApertures) {
     aperture.visibilityPolygon = computeApertureVisibilityPolygon(aperture);
   }
+  applyLightingTuning();
   staticLightDirty = true;
   staticLightImageData = null;
 }
@@ -94,6 +117,32 @@ function resetLighting() {
 function markStaticLightingDirty() {
   staticLightDirty = true;
   staticLightImageData = null;
+}
+
+function applyLightingTuning() {
+  if (!currentMissionLighting) return;
+  lightingGlobalAmbient = tunedGlobalAmbient(currentMissionLighting.globalAmbient ?? LIGHT_GLOBAL_AMBIENT);
+
+  for (const lamp of lightingLamps) {
+    lamp.radius = lightingTunedUnit('roomLampRadius', 900);
+    lamp.intensity = typeof getTuningNumber === 'function' ? getTuningNumber('roomLampIntensity', 1) : 1;
+    lamp.falloffPower = typeof getTuningNumber === 'function' ? getTuningNumber('roomLampFalloffPower', 1.45) : 1.45;
+    const [odx, ody] = getLampOffset(lamp);
+    lamp.lightX = lamp.x + odx;
+    lamp.lightY = lamp.y + ody;
+    lamp.visibilityPolygon = computeLampVisibilityPolygon(lamp);
+  }
+
+  for (const aperture of lightingApertures) {
+    if (aperture.kind !== 'door') continue;
+    aperture.range = lightingTunedUnit('doorLightRange', 320);
+    aperture.intensity = typeof getTuningNumber === 'function' ? getTuningNumber('doorLightIntensity', 0.62) : 0.62;
+    aperture.falloffPower = typeof getTuningNumber === 'function' ? getTuningNumber('doorLightFalloffPower', 0.7) : 0.7;
+    aperture.spreadRadians = typeof getTuningRadians === 'function' ? getTuningRadians('doorLightSpreadDegrees', 63) : 1.1;
+    aperture.visibilityPolygon = computeApertureVisibilityPolygon(aperture);
+  }
+
+  markStaticLightingDirty();
 }
 
 function setLightingAperturesOpen(ids, open) {
@@ -277,9 +326,10 @@ function getPlayerGlowContribution(wx, wy) {
   const dx = wx - player.x;
   const dy = wy - player.y;
   const dist = Math.hypot(dx, dy);
-  if (dist > PLAYER_GLOW_RADIUS) return 0;
+  const glowRadius = typeof playerGlowRadius === 'function' ? playerGlowRadius() : PLAYER_GLOW_RADIUS;
+  if (dist > glowRadius) return 0;
 
-  const t = dist / PLAYER_GLOW_RADIUS;
+  const t = dist / glowRadius;
   return t <= 0.4 ? 1 : (1 - t) / 0.6;
 }
 
@@ -333,11 +383,11 @@ function getStaticLightLevel(wx, wy) {
 }
 
 function isLit(wx, wy) {
-  return getLightLevel(wx, wy, { includePlayerGlow: true }) >= PLAYER_VISIBLE_LIGHT_THRESHOLD;
+  return getLightLevel(wx, wy, { includePlayerGlow: true }) >= playerVisibleLightThreshold();
 }
 
 function isLitByLamps(wx, wy) {
-  return getLightLevel(wx, wy, { includePlayerGlow: false }) >= ENEMY_BRIGHT_LIGHT_THRESHOLD;
+  return getLightLevel(wx, wy, { includePlayerGlow: false }) >= enemyBrightLightThreshold();
 }
 
 function hitLampAt(wx, wy) {
@@ -442,7 +492,7 @@ function drawApertureLight(aperture) {
 function drawPlayerGlow(offsetX = 0, offsetY = 0, renderScale = 1) {
   const glowX = (player.x - offsetX) / renderScale;
   const glowY = (player.y - offsetY) / renderScale;
-  const glowRadius = PLAYER_GLOW_RADIUS / renderScale;
+  const glowRadius = (typeof playerGlowRadius === 'function' ? playerGlowRadius() : PLAYER_GLOW_RADIUS) / renderScale;
   const pg = lightCtx.createRadialGradient(glowX, glowY, 0, glowX, glowY, glowRadius);
   pg.addColorStop(0, 'rgba(255,255,255,1)');
   pg.addColorStop(0.4, 'rgba(255,255,255,1)');
@@ -649,3 +699,18 @@ function drawLighting() {
 
   ctx.drawImage(lightCanvas, camera.x, camera.y, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 }
+
+window.addEventListener('tuningchange', (event) => {
+  const key = event.detail?.key;
+  if (!key || ![
+    'globalAmbient',
+    'roomLampRadius',
+    'roomLampIntensity',
+    'roomLampFalloffPower',
+    'doorLightRange',
+    'doorLightIntensity',
+    'doorLightFalloffPower',
+    'doorLightSpreadDegrees',
+  ].includes(key)) return;
+  applyLightingTuning();
+});

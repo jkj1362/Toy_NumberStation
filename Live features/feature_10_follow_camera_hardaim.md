@@ -21,6 +21,7 @@ The game renders a fixed `1920 x 1080` viewport into a larger `3200 x 1800` worl
 - Soft magnetism is strongest while the player actively moves mouse aim or right stick, then fades out over a short release window instead of tracking indefinitely.
 - When soft magnetism is active, the assisted enemy gets a small cyan reticle and the fire guide line brightens.
 - The render loop draws world-space content through the camera transform, then composites to the screen canvas.
+- Camera look-ahead, hard-aim distance, occlusion padding, camera easing, lookahead easing, hard-aim vision, and aim-assist values are exposed in the tuning/debug panel.
 
 ## Current Caveats
 

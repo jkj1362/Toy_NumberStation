@@ -1,5 +1,11 @@
 const INPUT_DEADZONE = 0.15;
 
+function inputDeadzone() {
+  return typeof getTuningNumber === 'function'
+    ? getTuningNumber('inputDeadzone', INPUT_DEADZONE)
+    : INPUT_DEADZONE;
+}
+
 const INPUT_BINDINGS = {
   moveUp: ['KeyW', 'ArrowUp'],
   moveDown: ['KeyS', 'ArrowDown'],
@@ -48,6 +54,10 @@ let mouseSeen = false;
 let mouseMovedSinceUpdate = false;
 let lastAimDevice = 'keyboardMouse';
 
+function isTuningUiEvent(e) {
+  return typeof e.target?.closest === 'function' && !!e.target.closest('#tuning-panel, #tuning-toggle');
+}
+
 window.addEventListener('keydown', (e) => {
   inputKeys[e.code] = true;
 });
@@ -57,6 +67,7 @@ window.addEventListener('keyup', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
+  if (isTuningUiEvent(e)) return;
   mouseClientX = e.clientX;
   mouseClientY = e.clientY;
   mouseSeen = true;
@@ -65,6 +76,10 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
+  if (isTuningUiEvent(e)) {
+    inputMouseButtons[e.button] = false;
+    return;
+  }
   inputMouseButtons[e.button] = true;
   mouseClientX = e.clientX;
   mouseClientY = e.clientY;
@@ -75,6 +90,7 @@ window.addEventListener('mousedown', (e) => {
 
 window.addEventListener('mouseup', (e) => {
   inputMouseButtons[e.button] = false;
+  if (isTuningUiEvent(e)) return;
 });
 
 window.addEventListener('contextmenu', (e) => {
@@ -120,12 +136,13 @@ function readGamepadMove(gp) {
   const rawX = gp.axes[0] ?? 0;
   const rawY = gp.axes[1] ?? 0;
   const magnitude = Math.min(1, Math.hypot(rawX, rawY));
-  if (magnitude <= INPUT_DEADZONE) return { x: 0, y: 0, amount: 0 };
+  const deadzone = inputDeadzone();
+  if (magnitude <= deadzone) return { x: 0, y: 0, amount: 0 };
 
   return {
     x: rawX / magnitude,
     y: rawY / magnitude,
-    amount: (magnitude - INPUT_DEADZONE) / (1 - INPUT_DEADZONE),
+    amount: (magnitude - deadzone) / (1 - deadzone),
   };
 }
 
@@ -134,7 +151,7 @@ function readGamepadAim(gp) {
 
   const rawX = gp.axes[2] ?? 0;
   const rawY = gp.axes[3] ?? 0;
-  if (Math.hypot(rawX, rawY) <= INPUT_DEADZONE) return { active: false, angle: 0 };
+  if (Math.hypot(rawX, rawY) <= inputDeadzone()) return { active: false, angle: 0 };
 
   return {
     active: true,

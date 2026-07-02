@@ -13,9 +13,29 @@ const SOUND_ATTENUATION_DEBUG_LIFETIME = 42;
 const SOUND_GUNSHOT_CUE_LIFETIME = 72;
 const SOUND_FOOTSTEP_CUE_LIFETIME = 48;
 const SOUND_DEFAULT_CUE_LIFETIME = 42;
-const SOUND_DOOR_CONE_SPREAD = Math.PI / 3;
 const ENEMY_FOOTSTEP_CUE_RADIUS = scaleEnemyUnit(600);
 const ENEMY_FOOTSTEP_CUE_INTERVAL = 18;
+
+function soundTunedUnit(key, fallback) {
+  return scaleEnemyUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
+}
+
+function soundGunshotRadius() { return soundTunedUnit('soundGunshotRadius', 350); }
+function soundFootstepRadius() { return soundTunedUnit('soundFootstepRadius', 120); }
+function soundWallTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundWallTransmission', SOUND_WALL_TRANSMISSION) : SOUND_WALL_TRANSMISSION; }
+function soundDefaultClosedDoorTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundClosedDoorTransmission', SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION) : SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION; }
+function soundVagueSourceDistance() { return soundTunedUnit('soundVagueSourceDistance', 75); }
+function soundLifetime() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundLifetime', SOUND_LIFETIME) : SOUND_LIFETIME; }
+function soundAttenuationDebugLifetime() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundAttenuationDebugLifetime', SOUND_ATTENUATION_DEBUG_LIFETIME) : SOUND_ATTENUATION_DEBUG_LIFETIME; }
+function soundGunshotCueLifetime() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundGunshotCueLifetime', SOUND_GUNSHOT_CUE_LIFETIME) : SOUND_GUNSHOT_CUE_LIFETIME; }
+function soundFootstepCueLifetime() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundFootstepCueLifetime', SOUND_FOOTSTEP_CUE_LIFETIME) : SOUND_FOOTSTEP_CUE_LIFETIME; }
+function soundDefaultCueLifetime() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundDefaultCueLifetime', SOUND_DEFAULT_CUE_LIFETIME) : SOUND_DEFAULT_CUE_LIFETIME; }
+function enemyFootstepCueRadius() { return soundTunedUnit('enemyFootstepCueRadius', 600); }
+function enemyFootstepCueInterval() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyFootstepCueInterval', ENEMY_FOOTSTEP_CUE_INTERVAL) : ENEMY_FOOTSTEP_CUE_INTERVAL; }
+function showSoundSourceDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugSoundSource') : SHOW_SOUND_SOURCE_DEBUG; }
+function showSoundAttenuationDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugSoundAttenuation') : SHOW_SOUND_ATTENUATION_DEBUG; }
+function showSoundAllPathDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugSoundAllPaths') : SHOW_SOUND_ALL_PATH_DEBUG; }
+function soundDoorDetourRatio() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundDoorDetourRatio', 1.5) : 1.5; }
 
 const SOUND_ROOM_SPECS = [
   { id: 'lobby',    x: 460, y: 590 },
@@ -126,7 +146,7 @@ function getDoorSoundTransmission(doorId) {
   if (!door || door.state === 'open' || door.state === 'destroyed') return 1;
   return typeof door.soundTransmission === 'number'
     ? door.soundTransmission
-    : SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION;
+    : soundDefaultClosedDoorTransmission();
 }
 
 function findNearestSoundRoom(x, y) {
@@ -217,7 +237,7 @@ function evaluateDirectSoundPath(sourceX, sourceY, listenerX, listenerY, baseRad
   const walls = (typeof WALLS !== 'undefined' && Array.isArray(WALLS)) ? WALLS : [];
   for (const wall of walls) {
     if (!segmentIntersectsRect(sourceX, sourceY, listenerX, listenerY, wall)) continue;
-    multiplier *= SOUND_WALL_TRANSMISSION;
+    multiplier *= soundWallTransmission();
     crossedWall = true;
   }
 
@@ -225,7 +245,7 @@ function evaluateDirectSoundPath(sourceX, sourceY, listenerX, listenerY, baseRad
     if (!segmentIntersectsRect(sourceX, sourceY, listenerX, listenerY, door)) continue;
     const transmission = typeof door.soundTransmission === 'number'
       ? door.soundTransmission
-      : SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION;
+      : soundDefaultClosedDoorTransmission();
     multiplier *= transmission;
     crossedDoor = true;
     if (!crossedDoorProxy) {
@@ -247,7 +267,7 @@ function evaluateDirectSoundPath(sourceX, sourceY, listenerX, listenerY, baseRad
     const dy = sourceY - listenerY;
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist > 1e-6) {
-      const perceivedDistance = Math.min(dist * 0.35, SOUND_VAGUE_SOURCE_DISTANCE, baseRadius * 0.25);
+      const perceivedDistance = Math.min(dist * 0.35, soundVagueSourceDistance(), baseRadius * 0.25);
       perceivedX = listenerX + (dx / dist) * perceivedDistance;
       perceivedY = listenerY + (dy / dist) * perceivedDistance;
     }
@@ -323,6 +343,13 @@ function evaluateSoundPath(sourceX, sourceY, listenerX, listenerY, baseRadius) {
   if (!portal) return direct;
 
   const directDistance = distanceBetweenPoints(sourceX, sourceY, listenerX, listenerY);
+  if (direct.localization === 'muffled' &&
+      direct.proxyDoorId !== null &&
+      portal.localization === 'clear' &&
+      portal.pathDistance > directDistance * soundDoorDetourRatio()) {
+    return direct;
+  }
+
   const directRatio = pathAudibilityRatio(direct, directDistance);
   const portalRatio = pathAudibilityRatio(portal, portal.pathDistance);
   return portalRatio < directRatio ? portal : direct;
@@ -355,9 +382,9 @@ function enemyCanHearSound(e, sound) {
 }
 
 function getSoundCueLifetime(sound) {
-  if (sound.isGunshot) return SOUND_GUNSHOT_CUE_LIFETIME;
-  if (sound.sourceType === 'player' || sound.sourceType === 'enemy') return SOUND_FOOTSTEP_CUE_LIFETIME;
-  return SOUND_DEFAULT_CUE_LIFETIME;
+  if (sound.isGunshot) return soundGunshotCueLifetime();
+  if (sound.sourceType === 'player' || sound.sourceType === 'enemy') return soundFootstepCueLifetime();
+  return soundDefaultCueLifetime();
 }
 
 function getSoundCueMagnitude(sound, path) {
@@ -391,6 +418,8 @@ function pushPlayerSoundCue(sound, path) {
     isGunshot: !!sound.isGunshot,
     sourceX: sound.x,
     sourceY: sound.y,
+    listenerX: player.x,
+    listenerY: player.y,
     multiplier: path.multiplier,
     distance: path.distance,
     effectiveRadius: path.effectiveRadius,
@@ -438,8 +467,8 @@ function evaluateAndPushPlayerSoundCue(sound) {
 }
 
 function pushSoundAttenuationDebug(e, sound, path, heard = true) {
-  if (!SHOW_SOUND_ATTENUATION_DEBUG) return;
-  if (!heard && !SHOW_SOUND_ALL_PATH_DEBUG) return;
+  if (!showSoundAttenuationDebug()) return;
+  if (!heard && !showSoundAllPathDebug()) return;
   soundAttenuationEvents.push({
     sourceX: sound.x,
     sourceY: sound.y,
@@ -454,7 +483,7 @@ function pushSoundAttenuationDebug(e, sound, path, heard = true) {
     pathKind: path.pathKind,
     pathPoints: path.pathPoints,
     heard,
-    life: SOUND_ATTENUATION_DEBUG_LIFETIME,
+    life: soundAttenuationDebugLifetime(),
   });
 }
 
@@ -463,7 +492,7 @@ function emitSoundEvent(sound) {
     x: sound.x,
     y: sound.y,
     radius: sound.radius,
-    life: SOUND_LIFETIME,
+    life: soundLifetime(),
     sourceType: sound.sourceType ?? 'unknown',
   };
   soundEvents.push(event);
@@ -506,7 +535,7 @@ function notifyPlayerMoved() {
   emitSoundEvent({
     x: player.x,
     y: player.y,
-    radius: FOOTSTEP_RADIUS * noiseScale,
+    radius: soundFootstepRadius() * noiseScale,
     sourceType: 'player',
     sourceActor: player,
     canAlertEnemies: false,
@@ -514,7 +543,7 @@ function notifyPlayerMoved() {
 
   for (const e of enemies) {
     // Per-enemy footstep radius: walk reaches FOOTSTEP_RADIUS, sneak is quieter, sprint is louder.
-    const footRadius = e.proximityRadius + noiseScale * (FOOTSTEP_RADIUS - e.proximityRadius);
+    const footRadius = e.proximityRadius + noiseScale * (soundFootstepRadius() - e.proximityRadius);
     const sound = { x: player.x, y: player.y, radius: footRadius, sourceType: 'player', sourceActor: player };
     const path = evaluateEnemySound(e, sound);
     pushSoundAttenuationDebug(e, sound, path, path.heard);
@@ -559,52 +588,37 @@ function drawPlayerClearRingCue(cue, fade, progress) {
   ctx.beginPath();
   ctx.arc(cue.sourceX, cue.sourceY, radius, 0, Math.PI * 2);
   ctx.stroke();
-
-  if (cue.isGunshot) {
-    ctx.globalAlpha = fade * 0.22;
-    ctx.lineWidth = scaleEnemyUnit(1);
-    ctx.beginPath();
-    ctx.arc(cue.sourceX, cue.sourceY, radius * 1.35, 0, Math.PI * 2);
-    ctx.stroke();
-  }
   ctx.restore();
 }
 
 function drawPlayerDoorConeCue(cue, fade, progress) {
-  const reach = cue.magnitude * (0.45 + progress * 0.75);
-  const spread = SOUND_DOOR_CONE_SPREAD * (cue.isGunshot ? 1.2 : 1);
-  const start = cue.angle - spread / 2;
-  const end = cue.angle + spread / 2;
-  const arcs = cue.isGunshot ? 5 : 3;
+  const door = cue.doorId && typeof getDoorById === 'function' ? getDoorById(cue.doorId) : null;
+  let angle;
+  if (door?.orientation === 'horizontal') {
+    const doorY = door.y + door.h / 2;
+    angle = cue.sourceY < doorY ? Math.PI / 2 : -Math.PI / 2;
+  } else if (door?.orientation === 'vertical') {
+    const doorX = door.x + door.w / 2;
+    angle = cue.sourceX < doorX ? 0 : Math.PI;
+  } else {
+    angle = Math.atan2(cue.proxyY - cue.sourceY, cue.proxyX - cue.sourceX);
+  }
+  const radius = Math.min(
+    cue.magnitude,
+    Math.max(scaleEnemyUnit(22), cue.magnitude * (0.24 + progress * 0.62))
+  );
+  const spread = Math.PI / 2.3;
+  const start = angle - spread / 2;
+  const end = angle + spread / 2;
 
   ctx.save();
-  ctx.globalAlpha = fade * 0.14;
-  ctx.fillStyle = '#ffbf45';
-  ctx.beginPath();
-  ctx.moveTo(cue.proxyX, cue.proxyY);
-  ctx.arc(cue.proxyX, cue.proxyY, reach, start, end);
-  ctx.closePath();
-  ctx.fill();
-
   ctx.strokeStyle = '#ffcf6a';
   ctx.lineWidth = scaleEnemyUnit(cue.isGunshot ? 2.4 : 1.7);
-  ctx.setLineDash([scaleEnemyUnit(10), scaleEnemyUnit(7)]);
-  for (let i = 1; i <= arcs; i++) {
-    const t = (i - 0.55 + progress * 0.9) / arcs;
-    const r = reach * Math.min(1, t);
-    if (r <= scaleEnemyUnit(4) || r >= reach) continue;
-    ctx.globalAlpha = fade * (0.5 + 0.3 * i / arcs);
-    ctx.beginPath();
-    ctx.arc(cue.proxyX, cue.proxyY, r, start, end);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-
-  ctx.globalAlpha = fade * 0.75;
-  ctx.fillStyle = '#ffcf6a';
+  ctx.globalAlpha = fade * 0.72;
   ctx.beginPath();
-  ctx.arc(cue.proxyX, cue.proxyY, scaleEnemyUnit(cue.isGunshot ? 5 : 3.5), 0, Math.PI * 2);
-  ctx.fill();
+  ctx.arc(cue.proxyX, cue.proxyY, radius, start, end);
+  ctx.stroke();
+
   ctx.restore();
 }
 
@@ -650,7 +664,7 @@ function drawSoundEvents() {
   drawPlayerSoundCueEvents();
 
   for (const a of soundAttenuationEvents) {
-    const fade = a.life / SOUND_ATTENUATION_DEBUG_LIFETIME;
+    const fade = a.life / soundAttenuationDebugLifetime();
     const strength = Math.max(0.08, Math.min(1, a.multiplier));
     let stroke = '#71e8ff';
     let fill = '#71e8ff';
@@ -721,13 +735,13 @@ function drawSoundEvents() {
     ctx.restore();
   }
 
-  if (!SHOW_SOUND_SOURCE_DEBUG) return;
+  if (!showSoundSourceDebug()) return;
 
   for (const s of soundEvents) {
-    const progress  = 1 - s.life / SOUND_LIFETIME;
+    const progress  = 1 - s.life / soundLifetime();
     const r         = s.radius * (0.2 + progress * 0.8);
-    const alpha     = (s.life / SOUND_LIFETIME) * 0.6;
-    const isGunshot = s.radius >= GUNSHOT_RADIUS;
+    const alpha     = (s.life / soundLifetime()) * 0.6;
+    const isGunshot = s.radius >= soundGunshotRadius();
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = isGunshot ? '#ffe066' : '#888888';

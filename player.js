@@ -38,17 +38,41 @@ const HARD_AIM_MAGNET_RANGE = scalePlayerUnit(520);
 const HARD_AIM_MAGNET_STRENGTH = 0.25;
 const HARD_AIM_MAGNET_RELEASE_FRAMES = 10;
 const PLAYER_GLOW_RADIUS = scalePlayerUnit(80);
-const PLAYER_PROXIMITY_RADIUS = scalePlayerUnit(50);
+const PLAYER_PROXIMITY_RADIUS = scalePlayerUnit(35);
+
+function playerTunedUnit(key, fallback) {
+  return scalePlayerUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
+}
+
+function playerSneakSpeed() { return playerTunedUnit('playerSneakSpeed', 0.8); }
+function playerWalkSpeed() { return playerTunedUnit('playerWalkSpeed', 2.25); }
+function playerSprintSpeed() { return playerTunedUnit('playerSprintSpeed', 4); }
+function playerSneakNoiseScale() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerSneakNoiseScale', PLAYER_SNEAK_NOISE_SCALE) : PLAYER_SNEAK_NOISE_SCALE; }
+function playerWalkNoiseScale() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerWalkNoiseScale', PLAYER_WALK_NOISE_SCALE) : PLAYER_WALK_NOISE_SCALE; }
+function playerSprintNoiseScale() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerSprintNoiseScale', PLAYER_SPRINT_NOISE_SCALE) : PLAYER_SPRINT_NOISE_SCALE; }
+function walkModeStickThreshold() { return typeof getTuningNumber === 'function' ? getTuningNumber('walkModeStickThreshold', WALK_MODE_STICK_THRESHOLD) : WALK_MODE_STICK_THRESHOLD; }
+function playerMaxHealth() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerMaxHealth', PLAYER_MAX_HEALTH) : PLAYER_MAX_HEALTH; }
+function playerProjectileDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerProjectileDamage', PLAYER_PROJECTILE_DAMAGE) : PLAYER_PROJECTILE_DAMAGE; }
+function playerRadius() { return playerTunedUnit('playerRadius', 28); }
+function playerVisionAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('playerVisionAngleDegrees', 120) : VISION_ANGLE; }
+function hardAimVisionMultiplier() { return typeof getTuningNumber === 'function' ? getTuningNumber('hardAimVisionMultiplier', HARD_AIM_VISION_MULTIPLIER) : HARD_AIM_VISION_MULTIPLIER; }
+function hardAimMagnetEnabled() { return typeof getTuningBoolean === 'function' ? getTuningBoolean('hardAimMagnetEnabled', HARD_AIM_MAGNET_ENABLED) : HARD_AIM_MAGNET_ENABLED; }
+function hardAimMagnetAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('hardAimMagnetAngleDegrees', 13) : HARD_AIM_MAGNET_ANGLE; }
+function hardAimMagnetRange() { return playerTunedUnit('hardAimMagnetRange', 520); }
+function hardAimMagnetStrength() { return typeof getTuningNumber === 'function' ? getTuningNumber('hardAimMagnetStrength', HARD_AIM_MAGNET_STRENGTH) : HARD_AIM_MAGNET_STRENGTH; }
+function hardAimMagnetReleaseFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('hardAimMagnetReleaseFrames', HARD_AIM_MAGNET_RELEASE_FRAMES) : HARD_AIM_MAGNET_RELEASE_FRAMES; }
+function playerGlowRadius() { return playerTunedUnit('playerGlowRadius', 80); }
+function playerProximityRadius() { return playerTunedUnit('playerProximityRadius', 35); }
 
 // x, y = center of character; angle = 0 means facing up
 const player = {
   x: PLAYER_START.x,
   y: PLAYER_START.y,
-  speed: PLAYER_WALK_SPEED,
-  noiseScale: PLAYER_WALK_NOISE_SCALE,
+  speed: playerWalkSpeed(),
+  noiseScale: playerWalkNoiseScale(),
   movementMode: 'walk',
-  maxHealth: PLAYER_MAX_HEALTH,
-  health: PLAYER_MAX_HEALTH,
+  maxHealth: playerMaxHealth(),
+  health: playerMaxHealth(),
   alive: true,
   sprintActive: false,
   hardAim: false,
@@ -80,11 +104,11 @@ function angleDiff(a, b) {
 function resetPlayer() {
   player.x = PLAYER_START.x;
   player.y = PLAYER_START.y;
-  player.speed = PLAYER_WALK_SPEED;
-  player.noiseScale = PLAYER_WALK_NOISE_SCALE;
+  player.speed = playerWalkSpeed();
+  player.noiseScale = playerWalkNoiseScale();
   player.movementMode = 'walk';
-  player.maxHealth = PLAYER_MAX_HEALTH;
-  player.health = PLAYER_MAX_HEALTH;
+  player.maxHealth = playerMaxHealth();
+  player.health = playerMaxHealth();
   player.alive = true;
   player.sprintActive = false;
   player.hardAim = false;
@@ -104,11 +128,12 @@ function damagePlayer(amount, options = {}) {
 }
 
 function getPlayerVisionAngle() {
-  return player.hardAim ? VISION_ANGLE * HARD_AIM_VISION_MULTIPLIER : VISION_ANGLE;
+  const visionAngle = playerVisionAngle();
+  return player.hardAim ? visionAngle * hardAimVisionMultiplier() : visionAngle;
 }
 
 function getHardAimAssist(aimAngle) {
-  if (!HARD_AIM_MAGNET_ENABLED || typeof enemies === 'undefined') return { angle: null, enemy: null };
+  if (!hardAimMagnetEnabled() || typeof enemies === 'undefined') return { angle: null, enemy: null };
 
   let bestAngle = null;
   let bestEnemy = null;
@@ -120,16 +145,17 @@ function getHardAimAssist(aimAngle) {
     const dx = enemy.x - player.x;
     const dy = enemy.y - player.y;
     const dist = Math.hypot(dx, dy);
-    if (dist <= 0 || dist > HARD_AIM_MAGNET_RANGE) continue;
+    const magnetRange = hardAimMagnetRange();
+    if (dist <= 0 || dist > magnetRange) continue;
 
     const targetAngle = Math.atan2(dx, -dy);
     const diff = Math.abs(angleDiff(targetAngle, aimAngle));
-    if (diff > HARD_AIM_MAGNET_ANGLE) continue;
+    if (diff > hardAimMagnetAngle()) continue;
 
     if (typeof hasLOS === 'function' && !hasLOS(player.x, player.y, enemy.x, enemy.y)) continue;
     if (typeof isLit === 'function' && !isLit(enemy.x, enemy.y)) continue;
 
-    const score = diff + (dist / HARD_AIM_MAGNET_RANGE) * 0.08;
+    const score = diff + (dist / magnetRange) * 0.08;
     if (score < bestScore) {
       bestAngle = targetAngle;
       bestEnemy = enemy;
@@ -152,28 +178,30 @@ function updatePlayer(playerInput, activeProjectiles) {
   if (!forcedSneak && playerInput.sprintPressed) player.sprintActive = !player.sprintActive;
   if (forcedSneak) player.sprintActive = false;
 
-  player.speed = forcedSneak ? PLAYER_SNEAK_SPEED : PLAYER_WALK_SPEED;
-  player.noiseScale = forcedSneak ? PLAYER_SNEAK_NOISE_SCALE : PLAYER_WALK_NOISE_SCALE;
+  player.maxHealth = playerMaxHealth();
+  player.health = Math.min(player.health, player.maxHealth);
+  player.speed = forcedSneak ? playerSneakSpeed() : playerWalkSpeed();
+  player.noiseScale = forcedSneak ? playerSneakNoiseScale() : playerWalkNoiseScale();
   player.movementMode = forcedSneak ? 'sneak' : 'walk';
 
   if (playerInput.moveAmount > 0) {
     const sprinting = !forcedSneak && (playerInput.sprintHeld || player.sprintActive);
 
     if (forcedSneak) {
-      player.speed = PLAYER_SNEAK_SPEED;
-      player.noiseScale = PLAYER_SNEAK_NOISE_SCALE;
+      player.speed = playerSneakSpeed();
+      player.noiseScale = playerSneakNoiseScale();
       player.movementMode = 'sneak';
     } else if (sprinting) {
-      player.speed = PLAYER_SPRINT_SPEED;
-      player.noiseScale = PLAYER_SPRINT_NOISE_SCALE;
+      player.speed = playerSprintSpeed();
+      player.noiseScale = playerSprintNoiseScale();
       player.movementMode = 'sprint';
     } else if (playerInput.moveIsAnalog) {
-      player.speed = lerp(PLAYER_SNEAK_SPEED, PLAYER_WALK_SPEED, playerInput.moveAmount);
-      player.noiseScale = lerp(PLAYER_SNEAK_NOISE_SCALE, PLAYER_WALK_NOISE_SCALE, playerInput.moveAmount);
-      player.movementMode = playerInput.moveAmount >= WALK_MODE_STICK_THRESHOLD ? 'walk' : 'sneak';
+      player.speed = lerp(playerSneakSpeed(), playerWalkSpeed(), playerInput.moveAmount);
+      player.noiseScale = lerp(playerSneakNoiseScale(), playerWalkNoiseScale(), playerInput.moveAmount);
+      player.movementMode = playerInput.moveAmount >= walkModeStickThreshold() ? 'walk' : 'sneak';
     } else {
-      player.speed = PLAYER_WALK_SPEED;
-      player.noiseScale = PLAYER_WALK_NOISE_SCALE;
+      player.speed = playerWalkSpeed();
+      player.noiseScale = playerWalkNoiseScale();
       player.movementMode = 'walk';
     }
 
@@ -184,11 +212,12 @@ function updatePlayer(playerInput, activeProjectiles) {
   }
 
   // Wall collision (run twice to resolve corner cases)
-  pushOutOfWalls(player, PLAYER_RADIUS);
-  pushOutOfWalls(player, PLAYER_RADIUS);
+  const radius = playerRadius();
+  pushOutOfWalls(player, radius);
+  pushOutOfWalls(player, radius);
   // Canvas bounds fallback
-  player.x = Math.max(PLAYER_RADIUS, Math.min(GAME_WIDTH  - PLAYER_RADIUS, player.x));
-  player.y = Math.max(PLAYER_RADIUS, Math.min(GAME_HEIGHT - PLAYER_RADIUS, player.y));
+  player.x = Math.max(radius, Math.min(GAME_WIDTH  - radius, player.x));
+  player.y = Math.max(radius, Math.min(GAME_HEIGHT - radius, player.y));
 
   if (player.x !== prevX || player.y !== prevY) notifyPlayerMoved();
 
@@ -200,10 +229,10 @@ function updatePlayer(playerInput, activeProjectiles) {
     let assistBlend = 0;
     if (assist.angle !== null) {
       if (playerInput.aimAdjusting) {
-        player.aimAssistReleaseTimer = HARD_AIM_MAGNET_RELEASE_FRAMES;
+        player.aimAssistReleaseTimer = hardAimMagnetReleaseFrames();
         assistBlend = 1;
       } else if (player.aimAssistReleaseTimer > 0) {
-        assistBlend = player.aimAssistReleaseTimer / HARD_AIM_MAGNET_RELEASE_FRAMES;
+        assistBlend = player.aimAssistReleaseTimer / Math.max(1, hardAimMagnetReleaseFrames());
         player.aimAssistReleaseTimer--;
       }
     } else {
@@ -212,7 +241,7 @@ function updatePlayer(playerInput, activeProjectiles) {
 
     player.aimAssistBlend = assistBlend;
     if (assist.angle !== null && assistBlend > 0) {
-      player.targetAngle = lerpAngle(player.targetAngle, assist.angle, HARD_AIM_MAGNET_STRENGTH * assistBlend);
+      player.targetAngle = lerpAngle(player.targetAngle, assist.angle, hardAimMagnetStrength() * assistBlend);
     }
   } else {
     player.aimAssistTarget = null;
@@ -234,7 +263,7 @@ function updatePlayer(playerInput, activeProjectiles) {
     emitSound({
       x: player.x,
       y: player.y,
-      radius: GUNSHOT_RADIUS,
+      radius: typeof soundGunshotRadius === 'function' ? soundGunshotRadius() : GUNSHOT_RADIUS,
       isGunshot: true,
       sourceType: 'player',
       sourceActor: player,
