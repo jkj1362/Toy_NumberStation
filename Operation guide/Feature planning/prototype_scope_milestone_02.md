@@ -1,178 +1,129 @@
-# Number Stations - Milestone 2 Prototype Scope
+# Number Stations - Prototype 2 Scope
 
-**Status: Active milestone. First task implemented.**
+**Status: Active prototype. Tuning/debug controls implemented; remaining work reordered for AI reactions, door combat, and seeded mission generation.**
 
-Milestone 1 proved the core night-mission interaction feel. Milestone 2 should turn that single hardcoded test mission into a more durable **mission-content and tuning prototype**: still not the full day-cycle game, but no longer only a mechanics sandbox.
+Prototype 1 proved the core night-mission interaction feel. Prototype 2 should now close the most important missing gameplay reactions, make doors work as real stealth/combat objects, and reshape mission structure around the roguelike direction: a generated level stays fixed for the current character/run seed, then a new character starts with a newly generated level after death.
 
-## Milestone 2 Goal
+## Prototype 2 Goal
 
-Build a repeatable night-mission slice that can support content variation, tuning, and design decisions for the larger game.
+Build a stronger night-mission gameplay prototype that supports reactive AI, meaningful door combat, and seed-based mission generation.
 
-The milestone should answer:
+The prototype should answer:
 
-- Can the existing stealth systems hold up across more than one layout?
-- Which door/light/sound/enemy tuning values are stable enough to become reusable defaults?
-- What minimum mission result flow is needed before metagame work begins?
-- Which content pipeline shape should replace hardcoded mission data?
+- Do enemies react believably to corpses, companions in combat, muffled/attenuated sounds, and suspicious events across rooms?
+- Can doors support readable destruction, bullet holes, penetration, and alerts without becoming confusing?
+- What mission-data boundary is needed so procedural room reconstruction can generate a stable playable level from a seed?
+- Which systems should wait for Prototype 3 because they depend on metagame or full run-cycle design?
 
-## Recommended Scope
+## Completed Pre-Work
 
-### 1. Collapsible Tuning and Debug Controls
+### Collapsible Tuning and Debug Controls
 
 Implementation status: first pass implemented in `tuning.js`; see `Live features/feature_12_tuning_debug_controls.md` and `Operation guide/Feature planning/feature_12_tuning_debug_controls.md`.
 
-Build a lightweight in-game tuning/debug UI first, opened and collapsed by a button. The goal is to stop editing scattered constants during playtest and to make the current prototype-readable overlays intentional.
+This remains important support work for Prototype 2:
+
+- Right-side collapsible tuning/debug panel.
+- Numeric tunables exposed as sliders with live values.
+- Debug overlays separated from balance tuning.
+- Master debug overlay toggle.
+- Runtime tuning for sound, lighting, player, enemy, doors, mission, camera, fog, and input controls.
+
+## Recommended Scope
+
+### 1. Corpse, Body Discovery, and AI Event Reactions
+
+Next feature planning doc: `Operation guide/Feature planning/feature_13_ai_reactions_body_discovery.md`.
+
+Prototype 1 missed several important AI reactions. Prototype 2 should address those before broader content work.
 
 Minimum shape:
 
-- A small button fixed to the screen edge that opens/closes the tuning panel.
-- Grouped sections for Sound, Lighting, Enemy, Player, Doors, Mission, and Debug Overlays.
-- Checkboxes/toggles for debug visuals and binary modes.
-- A top-level "All Debug Overlays" toggle that controls every debug-only visual as one group.
-- When all debug overlays are off, the screen should match the actual player-facing game view exactly.
-- Sliders for numeric tunables, with the current numeric value shown beside each slider.
-- Numeric inputs may be used only where a slider is awkward, such as very large ranges, Infinity-capable values, or reload-only render scale values.
-- Values should apply at runtime where practical; values that still require reset/reload should be clearly separated in code.
-- Defaults should match the current Milestone 1 behavior.
+- Decide and implement first-pass corpse discovery.
+- If a living enemy sees a corpse, they should investigate or escalate instead of ignoring it.
+- Enemies should react when they see another companion running toward, chasing, or fighting the player.
+- Enemies should react to attenuated or muffled sounds from closed doors in a way that feels local and plausible.
+- Suspicious events should be able to escalate into a broader alert/search state when repeated or severe.
+- Avoid an omniscient hive mind. Reactions should come from visible events, audible events, local communication, or explicitly authored alert escalation.
 
-Numeric control rule:
+Candidate event types:
 
-- Every numeric tunable should default to a slider UI.
-- Each slider must show its live numeric value beside the control, using units where helpful: pixels, frames, degrees/radians, multiplier, HP, damage, or 0-1 transmission/threshold.
-- Sliders should have practical min/max bounds based on playtest usefulness, not just raw technical limits.
-- Values that can be `Infinity`, are discrete mode selectors, or are unsafe to change during runtime can use a numeric field, select box, or reload-only label instead.
-- Runtime sliders should update the active game immediately where safe; reset/reload-only controls should be visually separated.
+| Event | Expected first-pass reaction |
+|-------|------------------------------|
+| Corpse seen | Investigate, then alert/search if confirmed. |
+| Companion chasing player seen | Join alert or move toward the chase. |
+| Companion sprinting/running suspiciously seen | Become suspicious and face/move toward the event. |
+| Muffled sound through closed door | Investigate the relevant door/room side, not the exact hidden source. |
+| Gunshot or door penetration | Escalate quickly to alert/search. |
+| Repeated suspicious sounds | Escalate from suspicion to building search. |
 
-Action model:
+### 2. Door and Destruction Polish with Bullet Penetration
 
-- Balance and feel tuning should primarily be slider actions because those values are numeric and benefit from quick playtest adjustment.
-- Debug overlays should primarily be toggle actions because they are visibility layers that are either shown or hidden.
-- Do not treat every toggle as a debug overlay. Some gameplay-facing binary settings may also be toggles, such as enabling aim assist or player-facing sound cues.
-- The clean UI split is: numeric tuning sliders in gameplay/system sections, debug visibility toggles in the Debug Overlays section.
+Feature planning doc: `Operation guide/Feature planning/feature_14_door_ballistics_destruction.md`.
 
-Debug overlay rule:
+Doors should become intentional stealth/combat objects, not only blockers with HP bars.
 
-- Debug overlays are any visuals that reveal system state, tuning information, labels, hidden routes, perception geometry, sound paths, map knowledge not earned by the player, or testing-only markers.
-- These overlays should be grouped under a single master toggle, with individual child toggles for targeted tuning.
-- Turning the master debug overlay toggle off must hide all debug-only information while preserving normal player-facing HUD, health, mission prompts, discovered exfil visuals, sound cues intended for gameplay, and other shipped feedback.
-- The panel should make the distinction clear between gameplay feedback and debug overlays. For example, player-facing muffled sound cues can remain a gameplay toggle, while true source rings, attenuation paths, enemy labels, enemy sight cones, perf stats, and testing markers belong under Debug Overlays.
+Minimum shape:
 
-Balance/tuning control inventory from the current codebase:
+- Shooting a closed door creates persistent bullet holes.
+- Bullets can penetrate closed doors and continue to the other side.
+- Door penetration can damage or kill the player/enemies behind the door.
+- Bullet holes remain visible so the door records what happened.
+- Door shots and penetration should create strong sound/alert stimuli.
+- Enemies should respond by entering alert and quickly patrolling/searching connected building spaces.
+- If the current alert behavior is not enough, add a high-alert/building-search layer instead of only local chase behavior.
 
-This table intentionally excludes debug overlay toggles. Debug-only visibility controls are listed separately in the next table.
+Open design details:
 
-| Group | Current value/source | Control type | Notes |
-|-------|----------------------|--------------|-------|
-| Sound | `GUNSHOT_RADIUS` in `sound.js` | Slider + value | Player and enemy gunshot sound reach. |
-| Sound | `FOOTSTEP_RADIUS`, `WALK_SPEED` in `sound.js` | Slider + value | Player footstep sound scaling baseline. |
-| Sound | `SOUND_WALL_TRANSMISSION` in `sound.js` | Slider 0-1 | Wall attenuation for sound. |
-| Sound | `SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION` in `sound.js` and per-door `soundTransmission` in `game.js` | Slider 0-1 | Closed-door sound attenuation. |
-| Sound | `soundDoorDetourRatio()` in `sound.js` | Slider + value | Prefers a nearby closed-door muffled path over a long clear/open detour when the detour exceeds this ratio. |
-| Sound | `SOUND_VAGUE_SOURCE_DISTANCE` in `sound.js` | Slider + value | Offset distance for vague wall-localized sound. |
-| Sound | `SOUND_LIFETIME`, `SOUND_GUNSHOT_CUE_LIFETIME`, `SOUND_FOOTSTEP_CUE_LIFETIME`, `SOUND_DEFAULT_CUE_LIFETIME`, `SOUND_ATTENUATION_DEBUG_LIFETIME` in `sound.js` | Slider + value | Visual cue and debug event lifetimes. |
-| Sound | `ENEMY_FOOTSTEP_CUE_RADIUS`, `ENEMY_FOOTSTEP_CUE_INTERVAL` in `sound.js` | Slider + value | Player-facing enemy footstep cues. |
-| Lighting | `LIGHT_GLOBAL_AMBIENT`, mission `globalAmbient`, ambient zones in `lighting.js` / `game.js` | Slider 0-1 | Overall darkness and room spill. |
-| Lighting | `PLAYER_VISIBLE_LIGHT_THRESHOLD`, `ENEMY_DIM_LIGHT_THRESHOLD`, `ENEMY_BRIGHT_LIGHT_THRESHOLD` in `lighting.js` | Slider 0-1 | Player visibility and enemy sight thresholds. |
-| Lighting | `ROOM_LAMP_LIGHT.radius`, `.intensity`, `.falloffPower` in `game.js` | Slider + value | Shared room lamp reach and brightness. |
-| Lighting | `DOOR_LIGHT_APERTURE.range`, `.intensity`, `.falloffPower`, `.spreadRadians` in `game.js` | Slider + value | Light spilling through open/destroyed doors. |
-| Lighting/perf | `STATIC_LIGHT_RENDER_SCALE`, `DYNAMIC_LIGHT_RENDER_SCALE` in `lighting.js` | Numeric/reload-only | Render quality/performance tradeoff; likely reload-only. |
-| Player | `PLAYER_SNEAK_SPEED`, `PLAYER_WALK_SPEED`, `PLAYER_SPRINT_SPEED` in `player.js` | Slider + value | Movement speed tuning. |
-| Player | `PLAYER_SNEAK_NOISE_SCALE`, `PLAYER_WALK_NOISE_SCALE`, `PLAYER_SPRINT_NOISE_SCALE` in `player.js` | Slider | Noise emitted by movement mode. |
-| Player | `WALK_MODE_STICK_THRESHOLD` in `player.js` | Slider | Analog stick threshold between sneak/walk. |
-| Player | `PLAYER_MAX_HEALTH`, `PLAYER_PROJECTILE_DAMAGE`, `PLAYER_RADIUS` in `player.js` | Slider + value | Health, shot damage, collision size. |
-| Player vision/aim | `VISION_ANGLE`, `HARD_AIM_VISION_MULTIPLIER` in `player.js` | Slider + value | Player cone and hard-aim cone narrowing. |
-| Player aim assist | `HARD_AIM_MAGNET_ENABLED`, `HARD_AIM_MAGNET_ANGLE`, `HARD_AIM_MAGNET_RANGE`, `HARD_AIM_MAGNET_STRENGTH`, `HARD_AIM_MAGNET_RELEASE_FRAMES` in `player.js` | Toggle + sliders | Hard-aim target magnet tuning. |
-| Player light | `PLAYER_GLOW_RADIUS`, `PLAYER_PROXIMITY_RADIUS` in `player.js` | Slider + value | Player glow and proximity-related radius. |
-| Enemy | `ALERT_FRAMES`, `SUSPICION_TIMEOUT`, `REACTION_DELAY`, `SUSPICION_CONFIRM_DELAY`, `CAUTIOUS_FRAMES` in `enemy.js` | Slider + value | Enemy state timing and reaction windows. |
-| Enemy | `ENEMY_RADIUS`, `ENEMY_HIT_RADIUS`, `ENEMY_PLAYER_VISIBILITY_SAMPLE_RADIUS` in `enemy.js` | Slider + value | Collision, hit, and player-body sight sampling. |
-| Enemy | `STANDARD_VISION`, per-enemy `visionAngle`, `sightRange`, `proximityRadius` in `enemy.js` | Slider + value | Enemy sight cone and awareness bubble; sight range may need an Infinity option. |
-| Enemy movement | `ARRIVAL_RADIUS`, `ENEMY_DOORWAY_ARRIVAL_RADIUS`, `ENEMY_DOORWAY_OPEN_RADIUS`, per-enemy `patrolSpeed` in `enemy.js` | Slider + value | Patrol/path arrival and doorway movement tuning. |
-| Enemy combat | `ENEMY_MAX_HEALTH`, `ENEMY_PROJECTILE_DAMAGE`, `ENEMY_MELEE_DAMAGE`, `ENEMY_MELEE_RANGE`, `ENEMY_MELEE_COOLDOWN_FRAMES` in `enemy.js` | Slider + value | Enemy durability and damage output. |
-| Enemy shooting | Per-enemy `shootingRange`, `shootingRangeTolerance`, `shotCooldownFrames`, `shotSpeed`, `aimSpreadRadians` in `enemy.js` | Slider + value | Shooter archetype tuning. |
-| Enemy feedback | `PLAYER_HIT_FLASH_FRAMES`, `ENEMY_HIT_FLASH_FRAMES`, `SEARCH_SWEEP_RATE` in `enemy.js` | Slider + value | Hit feedback and search sweep pacing. |
-| Doors | Door `hp`, `maxHp`, `soundTransmission` in `game.js` | Slider + value | Per-door durability and sound transmission. |
-| Doors | `DOOR_DAMAGE`, `DOOR_INTERACT_RADIUS`, `DOOR_OPEN_ANGLE` in `game.js` | Slider + value | Door damage, interaction reach, open visual angle. |
-| Mission | `INTERACT_RADIUS`, `EXFIL_RADIUS`, `CORPSE_INTERACT_RADIUS` in `game.js` | Slider + value | Interaction and exfil usability tuning. |
-| Camera/perf | `CAM_SOFT_LOOKAHEAD_DIST`, `CAM_HARDAIM_DIST`, `CAM_CORNER_PADDING`, `CAM_HARDAIM_OCCLUSION_PADDING`, `CAM_EASE`, `CAM_LOOKAHEAD_EASE` in `game.js` | Slider + value | Camera feel tuning. |
-| Fog/perf | `FOG_RENDER_SCALE` in `game.js` | Numeric/reload-only | Fog quality/performance tradeoff; likely reload-only. |
-| Input | `INPUT_DEADZONE` in `input.js` | Slider | Controller stick deadzone. |
+- Decide whether bullet holes are visual-only or also create small visibility/sound leaks.
+- Decide penetration damage/falloff through doors.
+- Decide whether repeated holes weaken the door separately from door HP.
+- Decide how much enemies infer from bullet direction versus just gunfire location.
 
-Debug overlay group inventory:
+### 3. Mission Data Separation for Seeded Procedural Runs
 
-| Overlay | Current source | Master toggle behavior |
-|---------|----------------|------------------------|
-| Enemy sight cones and proximity rings | `drawEnemySightCone()` in `enemy.js` | Hidden when debug overlays are off. |
-| Enemy index labels | `drawEnemyLabels()` in `enemy.js` | Hidden when debug overlays are off. |
-| Sound source rings | `SHOW_SOUND_SOURCE_DEBUG` / `drawSoundEvents()` in `sound.js` | Hidden when debug overlays are off. |
-| Sound attenuation paths and labels | `SHOW_SOUND_ATTENUATION_DEBUG`, `SHOW_SOUND_ALL_PATH_DEBUG` / `drawSoundEvents()` in `sound.js` | Hidden when debug overlays are off. |
-| Performance overlay | `SHOW_PERF_OVERLAY` / `drawPerfOverlay()` in `game.js` | Hidden when debug overlays are off. |
-| Schematic map overlay | `hasMapKnowledge` / `drawMapGeometry()` in `game.js` | Hidden when debug overlays are off unless map knowledge has become a real player-earned mechanic. |
-| Secondary exfil testing marker | Testing branch in `drawExfilPoints()` in `game.js` | Hidden when debug overlays are off. |
-| Door HP bars | `drawDoorHealthBars()` in `game.js` | Hidden when debug overlays are off unless redesigned as player-facing damage feedback. |
+Feature planning doc: `Operation guide/Feature planning/feature_15_seeded_mission_generation.md`.
 
-Implementation note: do not try to make every value editable on day one. Start by routing the panel through a central tuning/debug object, then expose the highest-value controls first: the master debug overlay toggle, individual overlay toggles, sound transmission, wall transmission, lamp strength, enemy sight thresholds, door HP, and player/enemy movement noise.
+Mission data separation is still needed, but the reason has changed. It is not primarily for a hand-authored second map. It should become the boundary between gameplay systems and a seeded procedural mission generator.
 
-### 2. Mission Data Separation
+Target direction:
 
-Next feature planning doc: `Operation guide/Feature planning/feature_13_mission_data_separation.md`.
+- The game procedurally generates the dungeon/facility structure from modular room pieces.
+- The generated level is tied to a seed.
+- The same character/run keeps the same generated level until that character dies.
+- After character death, a new character begins a new session with a newly generated level/seed.
+- The current hardcoded facility can become a reference mission, fixed seed output, or module test case.
 
-Move hardcoded mission data toward authored mission definitions:
+Data to separate:
 
-- Walls and room centers.
-- Doors and door aperture links.
-- Lamps, ambient zones, and window apertures.
-- Enemy spawn points, archetypes, patrol routes, and nav graph nodes.
-- Pickup/exfil placement rules.
-- Sound portal graph data.
+- Room modules and connection rules.
+- Walls, bounds, door openings, and wall gap exits.
+- Door definitions, default states, HP, sound transmission, and light aperture links.
+- Lamps, windows, ambient zones, and lighting hooks.
+- Objective and exfil placement rules.
+- Enemy spawn rules, archetypes, patrol route generation, and nav graph nodes.
+- Sound room/portal graph data generated from room connections.
+- Seed/run identity and reset behavior.
 
-The goal is not a full editor yet. A simple mission data file or structured mission object is enough.
+The goal is not a full editor. The goal is a clean runtime mission object that can be produced by either the current fixed facility data or a procedural generator.
 
-### 3. Second Test Map
+## Deferred To Prototype 3 / Metagame-Aligned Work
 
-Create one additional small mission layout to validate that systems are not overfit to the current facility.
+### Mission Result Flow
 
-The second map should intentionally test:
+Move result flow to Prototype 3 unless a tiny death/restart hook is needed for seeded run testing.
 
-- More than one closed-door sound cone scenario.
-- At least one useful wall-vague sound cue.
-- A room with enough darkness/obstacles for hiding.
-- One alternate exfil or side exit.
-- Doorway pathing in at least two orientations.
-- A patrol route that crosses multiple rooms.
+Reason: mission results become more meaningful once the larger run loop and metagame consequences exist. A full result screen should align with campaign/day-cycle design rather than being bolted onto Prototype 2 too early.
 
-### 4. Door and Destruction Polish
+Mission data separation and result flow do not need to be bound together. Mission data answers "what level/run was generated and loaded?" Result flow answers "how did this run end and what consequences follow?"
 
-Make doors read like intentional gameplay objects rather than debug rectangles:
+### Second Test Map
 
-- Replace direct always-available HP bar with a better damage/readability presentation.
-- Add first-pass break/shatter visual state.
-- Consider door interaction feedback, such as small motion/flash/sound.
-- Re-evaluate enemy auto-open behavior and player door-block edge cases.
-- Decide whether locked, half-open, or peek states are needed now or deferred.
+Move the manually authored second test map to Prototype 3 or replace it with a seeded generation validation pass.
 
-### 5. Mission Result Flow
+Reason: if the game direction is roguelike procedural generation, Prototype 2 should invest in modular generation and seed stability rather than building a one-off second hand-authored map.
 
-Replace instant exfil reset with a minimal result screen or summary state:
-
-- Mission success/failure.
-- Enemies killed or avoided.
-- Times detected or alerts triggered.
-- Shots fired / doors destroyed.
-- Optional ghost/violent/noisy labels.
-
-This is not yet campaign consequence, but it creates the bridge to future end-of-day systems.
-
-### 6. Corpse and Body Discovery Decision
-
-Decide the first body-discovery scope:
-
-- Defer fully.
-- Simple timed discovery if a living guard sees a corpse.
-- Patrol/LOS-based discovery using existing sight checks.
-
-Milestone 2 should at least decide the direction because it strongly affects stealth/combat balance.
-
-## Explicitly Out Of Scope For Milestone 2
+## Explicitly Out Of Scope For Prototype 2
 
 These should remain deferred unless the project direction changes:
 
@@ -181,44 +132,49 @@ These should remain deferred unless the project direction changes:
 - Full NPC dialogue/suspicion system.
 - Full gear inventory and economy.
 - Full campaign persistence.
-- Multiple mission types beyond a simple objective/exfil variant.
-- Procedural generation.
+- Full mission result/scoring screen.
+- Full production procedural-generation variety.
+- Visual mission editor.
 - Final art/audio pass.
 
-## Candidate Milestone 2 Feature List
+## Candidate Prototype 2 Feature List
 
 | Priority | Work | Why It Matters |
 |----------|------|----------------|
-| P0 | Collapsible tuning/debug UI | Speeds up balancing and makes prototype overlays intentional before deeper content work. |
-| P0 | Mission data extraction | Required before more maps or repeatable tuning. |
-| P0 | Second test map | Validates systems outside the original hardcoded layout. |
-| P1 | Result screen | Gives missions closure and prepares for metagame consequence. |
-| P1 | Door visual/destruction polish | Doors are now central to stealth, sound, light, and combat. |
-| P1 | Body discovery decision/prototype | Determines how lethal play changes mission risk. |
-| P2 | Enemy coordination/corpse reaction | Builds on body discovery if selected. |
-| P2 | Basic gear/tool placeholder | Prepares for future daytime equipment without full inventory. |
+| Done | Collapsible tuning/debug UI | Speeds up balancing and makes prototype overlays intentional. |
+| P0 | Corpse/body discovery and AI event reactions | Closes missed Prototype 1 stealth-reaction behavior. |
+| P0 | Door destruction, holes, and bullet penetration | Makes doors central to stealth, sound, combat, and risk. |
+| P0 | High-alert/building-search behavior | Needed if door penetration/gunfire should escalate the whole facility. |
+| P0 | Seeded mission data separation | Required before modular procedural room generation can be reliable. |
+| P1 | Modular room generation proof | Verifies that generated room structures can feed walls, doors, lighting, nav, enemies, and sound. |
+| P1 | Run seed/death reset behavior | Keeps one generated level stable for a character and creates a new level after death. |
+| P2 | Minimal gear/tool placeholder | Only if needed to test doors or room generation; otherwise defer. |
 
 ## Success Criteria
 
-Milestone 2 is complete when:
+Prototype 2 is complete when:
 
-- A collapsible tuning/debug panel exists, defaults to the current Milestone 1 behavior, and exposes the highest-value sound, light, door, enemy, player, map, and overlay controls.
-- Debug overlays are grouped under one master toggle, and turning that toggle off makes the game view match the actual player-facing screen.
-- At least two authored mission layouts run through the same systems.
-- Mission geometry, doors, lighting, enemies, and sound portal data are no longer trapped entirely in one hardcoded block.
-- The player can complete a mission and see a basic result summary instead of immediate reset.
-- The team has decided whether body discovery is part of the next playable slice.
-- The remaining path toward daytime/metagame systems is clearer than it was at the end of Milestone 1.
+- The collapsible tuning/debug panel exists and remains useful for playtesting.
+- Enemies react to discovered corpses and visible companion combat/chase behavior.
+- Enemies can investigate muffled/attenuated closed-door sounds without knowing the exact hidden source.
+- Severe events such as gunshots, door penetration, or repeated suspicious events can escalate into a broader alert/search response.
+- Closed doors can show bullet holes, allow penetration, and let bullets damage actors on the other side.
+- Door shooting creates appropriate sound/alert consequences.
+- Mission content is no longer trapped entirely inside gameplay logic.
+- A fixed mission object or generator output can define walls, rooms, doors, lighting, enemy/nav data, objective/exfil placement, and sound portal data.
+- A seed can produce a stable level for the current character/run, and a new seed can be used after death.
+- Mission result flow and the second-map question are explicitly deferred or reframed for Prototype 3.
 
-## Open Questions For Milestone 2
+## Open Questions For Prototype 2
 
 | Question | Notes |
 |----------|-------|
-| Which controls should be runtime-editable first? | Highest value likely: debug overlays, sound attenuation, light thresholds, door HP, enemy sight, and movement/noise. |
-| Should tuning values persist across reloads? | Local storage may be enough for playtesting; authored defaults should remain in source. |
-| Should mission data live in plain JS, JSON, or a future editor format? | Plain JS is fastest; JSON is cleaner for tools. |
-| Is the second map hand-authored or assembled from reusable room modules? | Hand-authored is likely enough for Milestone 2. |
-| Do we keep `hasMapKnowledge` hardcoded on? | Milestone 2 may need a toggle to test known vs unknown layouts. |
-| Should body discovery be implemented before mission result scoring? | It affects stealth grading and consequences. |
-| What is the minimum useful gear placeholder? | A single tool like lockpick/flashlight may be enough. |
-| Should debug overlays be hidden by default? | Likely yes once result flow and tuning controls exist. |
+| How much do guards communicate? | Prefer visible/audible/local escalation first; avoid instant global knowledge unless high alert is triggered. |
+| What exactly counts as corpse discovery? | Direct LOS to corpse is the likely first pass. Blood trails/body hiding can wait. |
+| Should door holes affect visibility or sound? | Visual-only is simplest; small LOS/sound leaks are more systemic but riskier. |
+| How much damage passes through a door? | Needs tuning for fairness, readability, and player/enemy lethality. |
+| What does building-wide high alert mean? | Could be fast patrol/search through connected spaces, not perfect knowledge of player position. |
+| What is the minimum room module set? | Need enough room/connector types to test procedural reconstruction without building full content tools. |
+| Should mission data be JS or JSON? | JS is fastest while generation rules are still changing; JSON may be better later for tooling. |
+| What owns the run seed? | Prototype 2 can keep it local/runtime; Prototype 3 can connect it to metagame persistence. |
+| Is a full result screen needed now? | Probably no. Only add a small restart/death hook if needed for seed testing. |
