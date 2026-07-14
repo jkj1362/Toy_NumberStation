@@ -45,6 +45,11 @@ const SOUND_ROOM_SPECS = [
   { id: 'room_f',   x: 991, y: 590 },
 ].map(room => ({ ...room, x: scaleEnemyX(room.x), y: scaleEnemyY(room.y) }));
 
+const SOUND_UPPER_ROOM_BOUNDARY_Y = scaleEnemyY(449);
+const SOUND_ROOM_A_BOUNDARY_X = scaleEnemyX(409);
+const SOUND_ROOM_BC_BOUNDARY_X = scaleEnemyX(769);
+const SOUND_ROOM_F_BOUNDARY_X = scaleEnemyX(909);
+
 const SOUND_PORTAL_SPECS = [
   { a: 'lobby',    b: 'corridor', doorId: 'corridor_left_door',    x: 270, y: 449 },
   { a: 'lobby',    b: 'corridor', doorId: 'corridor_right_door',   x: 819, y: 449 },
@@ -149,19 +154,16 @@ function getDoorSoundTransmission(doorId) {
     : soundDefaultClosedDoorTransmission();
 }
 
-function findNearestSoundRoom(x, y) {
-  let best = SOUND_ROOM_SPECS[0];
-  let bestD2 = Infinity;
-  for (const room of SOUND_ROOM_SPECS) {
-    const dx = room.x - x;
-    const dy = room.y - y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < bestD2) {
-      bestD2 = d2;
-      best = room;
-    }
+function findSoundRoomAt(x, y) {
+  let roomId;
+  if (y < SOUND_UPPER_ROOM_BOUNDARY_Y) {
+    if (x < SOUND_ROOM_A_BOUNDARY_X) roomId = 'room_a';
+    else if (x > SOUND_ROOM_BC_BOUNDARY_X) roomId = 'room_bc';
+    else roomId = 'corridor';
+  } else {
+    roomId = x > SOUND_ROOM_F_BOUNDARY_X ? 'room_f' : 'lobby';
   }
-  return best;
+  return getSoundRoom(roomId);
 }
 
 function getPortalNeighbors(roomId) {
@@ -291,8 +293,8 @@ function evaluateDirectSoundPath(sourceX, sourceY, listenerX, listenerY, baseRad
 }
 
 function evaluatePortalSoundPath(sourceX, sourceY, listenerX, listenerY, baseRadius) {
-  const startRoom = findNearestSoundRoom(sourceX, sourceY);
-  const goalRoom = findNearestSoundRoom(listenerX, listenerY);
+  const startRoom = findSoundRoomAt(sourceX, sourceY);
+  const goalRoom = findSoundRoomAt(listenerX, listenerY);
   if (!startRoom || !goalRoom || startRoom.id === goalRoom.id) return null;
 
   const edges = buildPortalRoomPath(startRoom.id, goalRoom.id);
@@ -302,10 +304,14 @@ function evaluatePortalSoundPath(sourceX, sourceY, listenerX, listenerY, baseRad
   let localization = 'clear';
   const pathPoints = [{ x: sourceX, y: sourceY }];
   const portals = [];
+  let muffledProxy = null;
 
   for (const edge of edges) {
     multiplier *= edge.transmission;
-    if (edge.transmission < 1) localization = 'muffled';
+    if (edge.transmission < 1) {
+      localization = 'muffled';
+      muffledProxy = edge.portal;
+    }
     pathPoints.push({ x: edge.portal.x, y: edge.portal.y });
     portals.push(edge.portal);
   }
@@ -324,9 +330,9 @@ function evaluatePortalSoundPath(sourceX, sourceY, listenerX, listenerY, baseRad
     perceivedY: sourceY,
     pathKind: 'portal',
     portals,
-    proxyX: portals.length ? portals[portals.length - 1].x : sourceX,
-    proxyY: portals.length ? portals[portals.length - 1].y : sourceY,
-    proxyDoorId: portals.length ? portals[portals.length - 1].doorId : null,
+    proxyX: muffledProxy ? muffledProxy.x : sourceX,
+    proxyY: muffledProxy ? muffledProxy.y : sourceY,
+    proxyDoorId: muffledProxy ? muffledProxy.doorId : null,
     pathPoints,
     pathDistance,
   };
@@ -341,6 +347,13 @@ function evaluateSoundPath(sourceX, sourceY, listenerX, listenerY, baseRadius) {
   const direct = evaluateDirectSoundPath(sourceX, sourceY, listenerX, listenerY, baseRadius);
   const portal = evaluatePortalSoundPath(sourceX, sourceY, listenerX, listenerY, baseRadius);
   if (!portal) return direct;
+
+  const sourceRoom = findSoundRoomAt(sourceX, sourceY);
+  const listenerRoom = findSoundRoomAt(listenerX, listenerY);
+  const crossesRooms = sourceRoom?.id !== listenerRoom?.id;
+  if (crossesRooms && direct.localization === 'clear' && portal.localization !== 'clear') {
+    return portal;
+  }
 
   const directDistance = distanceBetweenPoints(sourceX, sourceY, listenerX, listenerY);
   if (direct.localization === 'muffled' &&
@@ -422,6 +435,7 @@ function pushPlayerSoundCue(sound, path) {
     listenerY: player.y,
     multiplier: path.multiplier,
     distance: path.distance,
+    baseRadius: sound.radius,
     effectiveRadius: path.effectiveRadius,
     magnitude,
     life,
@@ -508,12 +522,18 @@ function emitSoundEvent(sound) {
 
     if (sound.isGunshot && pawnInCone(e.x, e.y, e.angle, e.visionAngle, sound.x, sound.y) && hasLOS(e.x, e.y, sound.x, sound.y)) {
       // Direct observation of muzzle flash: immediate alert.
-      e.reactionTimer   = 0;
-      e.pendingReaction = null;
-      e.state      = 'alert';
-      e.alertTimer = ALERT_FRAMES;
-      e.targetAngle = Math.atan2(sound.x - e.x, -(sound.y - e.y));
+      const actorTargetKnown = sound.sourceType === 'enemy' && sound.sourceActor?.state === 'alert' &&
+        sound.sourceActor.lastKnownX !== null;
+      const targetX = actorTargetKnown ? sound.sourceActor.lastKnownX : sound.x;
+      const targetY = actorTargetKnown ? sound.sourceActor.lastKnownY : sound.y;
+      const reason = actorTargetKnown ? 'alerted-enemy' : (sound.sourceType === 'player' ? 'player' : 'sound');
+      if (typeof enterEnemyAlert === 'function') enterEnemyAlert(e, targetX, targetY, false, reason);
       continue;
+    }
+
+    if (path.localization === 'muffled' && path.proxyDoorId !== null &&
+        typeof scheduleMuffledDoorInvestigation === 'function') {
+      if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y) || e.doorInvestigation) continue;
     }
 
     applySoundReaction(e, path.perceivedX, path.perceivedY);
@@ -548,6 +568,10 @@ function notifyPlayerMoved() {
     const path = evaluateEnemySound(e, sound);
     pushSoundAttenuationDebug(e, sound, path, path.heard);
     if (!path.heard) continue;
+    if (path.localization === 'muffled' && path.proxyDoorId !== null &&
+        typeof scheduleMuffledDoorInvestigation === 'function') {
+      if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y) || e.doorInvestigation) continue;
+    }
     applySoundReaction(e, path.perceivedX, path.perceivedY);
   }
 }
@@ -646,8 +670,20 @@ function drawPlayerWallPulseCue(cue, fade, progress) {
   ctx.restore();
 }
 
+function enemyClearCueHasCurrentOpenPath(cue) {
+  const baseRadius = cue.baseRadius ?? (cue.effectiveRadius / Math.max(0.01, cue.multiplier));
+  const direct = evaluateDirectSoundPath(cue.sourceX, cue.sourceY, player.x, player.y, baseRadius);
+  const sourceRoom = findSoundRoomAt(cue.sourceX, cue.sourceY);
+  const listenerRoom = findSoundRoomAt(player.x, player.y);
+  if (direct.localization === 'clear' && sourceRoom?.id === listenerRoom?.id) return true;
+  const portal = evaluatePortalSoundPath(cue.sourceX, cue.sourceY, player.x, player.y, baseRadius);
+  return !!portal && portal.localization === 'clear';
+}
+
 function drawPlayerSoundCueEvents() {
   for (const cue of playerSoundCueEvents) {
+    if (cue.cueType === 'clear-ring' && cue.sourceType === 'enemy' &&
+        !enemyClearCueHasCurrentOpenPath(cue)) continue;
     const fade = cue.life / cue.maxLife;
     const progress = 1 - fade;
     if (cue.cueType === 'door-cone') {

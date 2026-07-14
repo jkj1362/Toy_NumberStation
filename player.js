@@ -259,6 +259,8 @@ function updatePlayer(playerInput, activeProjectiles) {
       vx: dx * scalePlayerUnit(25),
       vy: dy * scalePlayerUnit(25),
       angle: player.angle,
+      sourceActor: player,
+      sourceType: 'player',
     });
     emitSound({
       x: player.x,

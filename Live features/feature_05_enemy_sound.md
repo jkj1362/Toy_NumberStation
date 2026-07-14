@@ -36,11 +36,12 @@ The propagation and debug-visualization code lives in `sound.js`; enemy AI react
 
 ## Current Caveats
 
-- The portal graph is authored for the current hardcoded facility and uses nearest-room attachment, not full geometric acoustic simulation.
+- The portal graph and axis-aligned room partitions are authored for the current hardcoded facility; this is not full geometric acoustic simulation.
 - The door detour rule is controlled by `soundDoorDetourRatio`, default `1.5`.
 - Wall-muffled localization uses a simple nearby perceived source along the incoming direction.
 - Enemy footsteps can create player-facing sound cues, but do not alert other enemies.
 - Enemy footstep cue radius is tuned separately from slow patrol speed so guards can be heard through nearby doors/open passages.
+- Exact-source enemy cues are suppressed if their direct line becomes blocked and no all-open portal route remains; muffled closed-door cues remain amber door arcs.
 - True-source sound rings are source-debug only and are controlled by the tuning/debug panel.
 - Attenuation path cues are debug overlays controlled by the tuning/debug panel.
 

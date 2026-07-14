@@ -61,6 +61,7 @@ function enemyAlertFrames() { return typeof getTuningNumber === 'function' ? get
 function enemySuspicionTimeout() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySuspicionTimeout', SUSPICION_TIMEOUT) : SUSPICION_TIMEOUT; }
 function enemyReactionDelay() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyReactionDelay', REACTION_DELAY) : REACTION_DELAY; }
 function enemySuspicionConfirmDelay() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySuspicionConfirmDelay', SUSPICION_CONFIRM_DELAY) : SUSPICION_CONFIRM_DELAY; }
+function enemyDamagedDoorConfirmDelay() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyDamagedDoorConfirmDelay', 90) : 90; }
 function enemyArrivalRadius() { return enemyTunedUnit('enemyArrivalRadius', 8); }
 function enemyRadius() { return enemyTunedUnit('enemyRadius', 16); }
 function enemyHitRadius() { return enemyTunedUnit('enemyHitRadius', 20); }
@@ -88,6 +89,7 @@ function enemySearchSweepRate() { return typeof getTuningNumber === 'function' ?
 function enemyCautiousFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyCautiousFrames', CAUTIOUS_FRAMES) : CAUTIOUS_FRAMES; }
 function showEnemySightDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugEnemySight') : true; }
 function showEnemyLabelsDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugEnemyLabels') : true; }
+function showHiddenEnemiesDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugHiddenEnemies') : false; }
 
 // Reactive navigation graph ??used by SEARCHING state to path to lastKnownX/Y.
 // Patrol routes use hand-placed waypoints; this graph is only for buildPath().
@@ -239,7 +241,10 @@ function _emitEnemyMovementSound(e, moved) {
 }
 
 function _stepEnemyToward(e, targetX, targetY) {
-  if (typeof openDoorNearEntity === 'function') openDoorNearEntity(e, enemyDoorwayOpenRadius());
+  const excludedDoorId = e.damagedDoorInvestigation?.doorId ?? e.alertDoorTransit?.doorId ?? null;
+  if (typeof openDoorNearEntity === 'function') {
+    openDoorNearEntity(e, enemyDoorwayOpenRadius(), excludedDoorId);
+  }
   const transitDoor = _findDoorwayTransitDoor(e.x, e.y);
   if (transitDoor) {
     const transitTarget = _doorwayTransitTarget(transitDoor, targetX, targetY);
@@ -274,6 +279,35 @@ function _stepEnemyToward(e, targetX, targetY) {
   };
   _emitEnemyMovementSound(e, step.moved);
   return step;
+}
+
+function _getDoorById(doorId) {
+  if (typeof DOORS === 'undefined' || !Array.isArray(DOORS)) return null;
+  return DOORS.find(door => door.id === doorId) ?? null;
+}
+
+function _getDoorInvestigationPoints(door, listenerX, listenerY) {
+  const cx = door.x + door.w / 2;
+  const cy = door.y + door.h / 2;
+  const offset = enemyRadius() * 1.6;
+
+  if (door.orientation === 'horizontal') {
+    const listenerSign = listenerY < cy ? -1 : 1;
+    return {
+      approachX: cx,
+      approachY: cy + listenerSign * (door.h / 2 + offset),
+      searchX: cx,
+      searchY: cy - listenerSign * (door.h / 2 + offset),
+    };
+  }
+
+  const listenerSign = listenerX < cx ? -1 : 1;
+  return {
+    approachX: cx + listenerSign * (door.w / 2 + offset),
+    approachY: cy,
+    searchX: cx - listenerSign * (door.w / 2 + offset),
+    searchY: cy,
+  };
 }
 
 // Ordered [{x,y}] waypoints through the nav graph. Start and goal are connected
@@ -423,6 +457,12 @@ function resetEnemies() {
     suspicionTimer:     0,
     reactionTimer:      0,    // counts down; state change held until 0
     pendingReaction:    null, // { state, targetAngle, sourceX, sourceY }
+    alertEpisode:       0,
+    alertReason:        null,
+    playerVisibleThisFrame: false,
+    observedCorpses:    new Set(),
+    observedDoorEvidence: new Map(),
+    observedAlertEpisodes: new Set(),
     suspicionLevel:     0,    // how many times enemy has entered suspicious from patrol
     suspicionPhase:     'turning', // 'turning'|'moving'|'searching'|'returning'
     suspicionSourceX:   0,    // world position of the suspicious stimulus
@@ -431,6 +471,13 @@ function resetEnemies() {
     suspicionReturnY:   0,
     suspicionSearchAccum:  0,  // accumulated search rotation at source
     suspicionOriginalAngle: 0, // targetAngle saved on suspicion entry; restored on return to patrol
+    suspicionReason:    null,
+    suspicionReturnPatrolIndex: 0,
+    suspicionReturnPauseTimer: 0,
+    suspicionReturnSweepAccum: 0,
+    doorInvestigation: null,
+    damagedDoorInvestigation: null,
+    alertDoorTransit:  null,
     patrolIndex:        0,    // current target waypoint index
     patrolPauseTimer:   0,    // counts up; node done when it reaches node.pauseFrames
     patrolSweepAccum:   0,    // accumulated |rotation| at current node
@@ -467,10 +514,54 @@ function damageEnemy(e, amount) {
 }
 
 // Queue a delayed state change. Does nothing if already reacting (existing pending wins).
-function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = enemyReactionDelay()) {
+function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = enemyReactionDelay(), reason = 'sound') {
   if (e.reactionTimer > 0) return;
   e.reactionTimer   = delayFrames;
-  e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY };
+  e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY, reason };
+}
+
+function enterEnemyAlert(e, targetX, targetY, confirmedPlayer = false, reason = 'sound') {
+  const wasAlert = e.state === 'alert';
+  e.reactionTimer = 0;
+  e.pendingReaction = null;
+  e.doorInvestigation = null;
+  e.damagedDoorInvestigation = null;
+  e.alertDoorTransit = null;
+  e.suspicionReason = null;
+  e.state = 'alert';
+  e.alertTimer = enemyAlertFrames();
+  e.lastKnownX = targetX;
+  e.lastKnownY = targetY;
+  e.alertReason = reason;
+  e.targetAngle = Math.atan2(targetX - e.x, -(targetY - e.y));
+  e.playerVisibleThisFrame = confirmedPlayer;
+  if (!wasAlert) e.alertEpisode++;
+}
+
+function scheduleMuffledDoorInvestigation(e, doorId, sourceX, sourceY) {
+  if (e.state !== 'patrol' || e.reactionTimer > 0) return false;
+  const door = _getDoorById(doorId);
+  if (!door || door.state !== 'closed') return false;
+  const doorX = door.x + door.w / 2;
+  const doorY = door.y + door.h / 2;
+  const angle = Math.atan2(doorX - e.x, -(doorY - e.y));
+  scheduleReaction(e, 'suspicious', angle, doorX, doorY);
+  if (!e.pendingReaction) return false;
+  e.pendingReaction.doorInvestigation = { doorId, sourceX, sourceY };
+  return true;
+}
+
+function scheduleDamagedDoorInvestigation(e, doorId) {
+  if (e.state === 'alert' || e.reactionTimer > 0) return false;
+  const door = _getDoorById(doorId);
+  if (!door || door.state === 'destroyed' || door.hp >= door.maxHp) return false;
+  const doorX = door.x + door.w / 2;
+  const doorY = door.y + door.h / 2;
+  const angle = Math.atan2(doorX - e.x, -(doorY - e.y));
+  scheduleReaction(e, 'suspicious', angle, doorX, doorY, enemyReactionDelay(), 'damaged-door');
+  if (!e.pendingReaction) return false;
+  e.pendingReaction.damagedDoorInvestigation = { doorId };
+  return true;
 }
 
 // Apply sound-triggered state transitions for one enemy.
@@ -485,11 +576,7 @@ function applySoundReaction(e, sourceX, sourceY) {
     scheduleReaction(e, 'alert', angle, sourceX, sourceY, enemySuspicionConfirmDelay());
   } else if (e.state === 'searching' || e.state === 'returning' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
     // Already on edge ??any sound snaps straight to alert, skipping suspicion delay
-    e.reactionTimer   = 0;
-    e.pendingReaction = null;
-    e.state      = 'alert';
-    e.alertTimer = enemyAlertFrames();
-    e.targetAngle = angle;
+    enterEnemyAlert(e, sourceX, sourceY, false, 'sound');
   } else if (e.state === 'alert') {
     e.alertTimer = enemyAlertFrames(); // refresh
   }
@@ -525,6 +612,100 @@ function getPlayerVisibilitySamples() {
     { x: player.x,     y: player.y + r },
     { x: player.x,     y: player.y - r },
   ];
+}
+
+function enemyCanSeeWorldPoint(e, x, y, requireLight = true) {
+  const dx = x - e.x;
+  const dy = y - e.y;
+  if (dx * dx + dy * dy > e.sightRange * e.sightRange) return false;
+  if (requireLight && !isLitByLamps(x, y)) return false;
+  if (!pawnInCone(e.x, e.y, e.angle, e.visionAngle, x, y)) return false;
+  return hasLOS(e.x, e.y, x, y);
+}
+
+function enemyCanSeeDoor(e, door) {
+  const closest = typeof closestPointOnRect === 'function'
+    ? closestPointOnRect(door, e.x, e.y)
+    : { x: door.x + door.w / 2, y: door.y + door.h / 2 };
+  const samples = [
+    closest,
+    { x: door.x + door.w / 2, y: door.y + door.h / 2 },
+    { x: door.x, y: door.y + door.h / 2 },
+    { x: door.x + door.w, y: door.y + door.h / 2 },
+    { x: door.x + door.w / 2, y: door.y },
+    { x: door.x + door.w / 2, y: door.y + door.h },
+  ];
+  return samples.some(sample => enemyCanSeeWorldPoint(e, sample.x, sample.y, false));
+}
+
+function detectLocalVisualStimulus(e) {
+  if (typeof corpses !== 'undefined' && Array.isArray(corpses)) {
+    for (const corpse of corpses) {
+      if (corpse.type !== 'enemy' || e.observedCorpses.has(corpse)) continue;
+      if (!enemyCanSeeWorldPoint(e, corpse.x, corpse.y)) continue;
+      e.observedCorpses.add(corpse);
+      return { type: 'corpse', x: corpse.x, y: corpse.y };
+    }
+  }
+
+  if (typeof DOORS !== 'undefined' && Array.isArray(DOORS)) {
+    for (const door of DOORS) {
+      const damaged = door.hp < door.maxHp;
+      if (!damaged && door.state !== 'destroyed') continue;
+      const evidenceState = `${door.state}:${Math.round(door.hp)}`;
+      if (e.observedDoorEvidence.get(door.id) === evidenceState) continue;
+      const x = door.x + door.w / 2;
+      const y = door.y + door.h / 2;
+      if (!enemyCanSeeDoor(e, door)) continue;
+      e.observedDoorEvidence.set(door.id, evidenceState);
+      return {
+        type: 'door',
+        doorId: door.id,
+        damaged: door.state !== 'destroyed',
+        x,
+        y,
+      };
+    }
+  }
+
+  for (const other of enemies) {
+    if (other === e || other.alive === false || other.state !== 'alert' || other.lastKnownX === null) continue;
+    const episodeKey = `${other.index}:${other.alertEpisode}`;
+    if (e.observedAlertEpisodes.has(episodeKey)) continue;
+    if (!enemyCanSeeWorldPoint(e, other.x, other.y)) continue;
+    e.observedAlertEpisodes.add(episodeKey);
+    return { type: 'alerted-enemy', x: other.lastKnownX, y: other.lastKnownY };
+  }
+
+  return null;
+}
+
+function notifyDoorDamaged(door, impactX, impactY, sourceActor = null) {
+  if (!door) return;
+  for (const e of enemies) {
+    if (e === sourceActor || e.alive === false) continue;
+    const dx = impactX - e.x;
+    const dy = impactY - e.y;
+    if (dx * dx + dy * dy > e.sightRange * e.sightRange) continue;
+    if (!pawnInCone(e.x, e.y, e.angle, e.visionAngle, impactX, impactY)) continue;
+    if (!enemyCanSeeDoor(e, door)) continue;
+
+    const evidenceState = `${door.state}:${Math.round(door.hp)}`;
+    e.observedDoorEvidence.set(door.id, evidenceState);
+    if (e.alertDoorTransit?.doorId === door.id) {
+      e.alertTimer = enemyAlertFrames();
+      continue;
+    }
+    const points = _getDoorInvestigationPoints(door, e.x, e.y);
+    enterEnemyAlert(e, points.searchX, points.searchY, false, 'door-impact');
+    e.alertDoorTransit = {
+      doorId: door.id,
+      ...points,
+      phase: 'approaching',
+    };
+    e.searchPath = buildPath(e.x, e.y, points.approachX, points.approachY);
+    e.searchPathIndex = 0;
+  }
 }
 
 // Step one tick along e.searchPath. Advances index across any waypoints already
@@ -621,15 +802,18 @@ function enemyCanSeeCone(e) {
   return false;
 }
 
-function moveTowardPlayer(e, pdx, pdy, pd2) {
-  if (pd2 <= enemyArrivalRadius() * enemyArrivalRadius()) return;
+function moveTowardPosition(e, targetX, targetY) {
+  const dx = targetX - e.x;
+  const dy = targetY - e.y;
+  const distanceSq = dx * dx + dy * dy;
+  if (distanceSq <= enemyArrivalRadius() * enemyArrivalRadius()) return;
 
-  if (_pathSegmentClear(e.x, e.y, player.x, player.y)) {
-    const step = _stepEnemyToward(e, player.x, player.y);
+  if (_pathSegmentClear(e.x, e.y, targetX, targetY)) {
+    const step = _stepEnemyToward(e, targetX, targetY);
     if (step.closer) return;
   }
 
-  e.searchPath      = buildPath(e.x, e.y, player.x, player.y);
+  e.searchPath      = buildPath(e.x, e.y, targetX, targetY);
   e.searchPathIndex = 0;
   followNavPath(e);
 }
@@ -654,6 +838,8 @@ function fireEnemyShot(e) {
     vx: dx * e.shotSpeed,
     vy: dy * e.shotSpeed,
     angle: shotAngle,
+    sourceActor: e,
+    sourceType: 'enemy',
   });
 
   if (typeof emitSound === 'function') {
@@ -669,27 +855,28 @@ function fireEnemyShot(e) {
 }
 
 function updateMeleeAlert(e) {
-  const pdx = player.x - e.x, pdy = player.y - e.y;
-  moveTowardPlayer(e, pdx, pdy, pdx * pdx + pdy * pdy);
-  tryMeleeAttack(e);
+  if (e.lastKnownX !== null) moveTowardPosition(e, e.lastKnownX, e.lastKnownY);
+  if (e.playerVisibleThisFrame) tryMeleeAttack(e);
 }
 
 function updateShooterAlert(e) {
+  const targetX = e.lastKnownX ?? e.x;
+  const targetY = e.lastKnownY ?? e.y;
   const pdx = player.x - e.x, pdy = player.y - e.y;
   const pd2 = pdx * pdx + pdy * pdy;
   const dist = Math.sqrt(pd2);
-  const canShoot = canShootPlayer(e);
+  const canShoot = e.playerVisibleThisFrame && canShootPlayer(e);
 
-  e.targetAngle = Math.atan2(pdx, -pdy);
+  e.targetAngle = Math.atan2(targetX - e.x, -(targetY - e.y));
   if (e.shotTimer > 0) e.shotTimer--;
 
   if (!canShoot) {
-    moveTowardPlayer(e, pdx, pdy, pd2);
+    moveTowardPosition(e, targetX, targetY);
     return;
   }
 
   if (dist > e.shootingRange) {
-    moveTowardPlayer(e, pdx, pdy, pd2);
+    moveTowardPosition(e, targetX, targetY);
     return;
   }
 
@@ -736,7 +923,14 @@ function updateEnemyProjectiles() {
     let hitDoor = false;
     if (!hitPlayer && typeof hitDoorAt === 'function') {
       const door = hitDoorAt(p.x, p.y);
-      if (door && typeof damageDoor === 'function') hitDoor = damageDoor(door);
+      if (door && typeof damageDoor === 'function') {
+        hitDoor = damageDoor(door, {
+          x: p.x,
+          y: p.y,
+          sourceActor: p.sourceActor,
+          sourceType: p.sourceType,
+        });
+      }
     }
 
     if (hitPlayer || hitDoor || hitsWall(p.x, p.y) || outOfBounds) {
@@ -761,27 +955,267 @@ function tryMeleeAttack(e) {
   }
 }
 
+function beginDoorInvestigation(e, request, originalAngle) {
+  const door = _getDoorById(request.doorId);
+  if (!door || door.state === 'destroyed') {
+    e.doorInvestigation = null;
+    e.suspicionPhase = 'turning';
+    return;
+  }
+
+  const points = _getDoorInvestigationPoints(door, e.x, e.y);
+  e.suspicionReturnX = e.x;
+  e.suspicionReturnY = e.y;
+  e.suspicionOriginalAngle = originalAngle;
+  e.suspicionReturnPatrolIndex = e.patrolIndex;
+  e.suspicionReturnPauseTimer = e.patrolPauseTimer;
+  e.suspicionReturnSweepAccum = e.patrolSweepAccum;
+  e.suspicionSearchAccum = 0;
+  e.suspicionPhase = 'door_approaching';
+  e.doorInvestigation = {
+    doorId: request.doorId,
+    ...points,
+    closeWaitTimer: 0,
+  };
+  e.searchPath = buildPath(e.x, e.y, points.approachX, points.approachY);
+  e.searchPathIndex = 0;
+}
+
+function beginDoorInvestigationReturn(e) {
+  const info = e.doorInvestigation;
+  e.suspicionPhase = 'door_exiting';
+  e.searchPath = [{ x: info.approachX, y: info.approachY }];
+  e.searchPathIndex = 0;
+}
+
+function beginDoorInvestigationHomePath(e) {
+  e.suspicionPhase = 'door_returning';
+  e.searchPath = buildPath(e.x, e.y, e.suspicionReturnX, e.suspicionReturnY);
+  e.searchPathIndex = 0;
+}
+
+function finishDoorInvestigation(e) {
+  e.x = e.suspicionReturnX;
+  e.y = e.suspicionReturnY;
+  e.state = 'patrol';
+  e.targetAngle = e.suspicionOriginalAngle;
+  e.patrolIndex = e.suspicionReturnPatrolIndex;
+  e.patrolPauseTimer = e.suspicionReturnPauseTimer;
+  e.patrolSweepAccum = e.suspicionReturnSweepAccum;
+  e.reactionTimer = 0;
+  e.pendingReaction = null;
+  e.doorInvestigation = null;
+}
+
+function updateDoorInvestigation(e) {
+  const info = e.doorInvestigation;
+  if (!info) return;
+  const door = _getDoorById(info.doorId);
+
+  if (e.suspicionPhase === 'door_approaching') {
+    if (!door || door.state === 'destroyed') {
+      beginDoorInvestigationHomePath(e);
+      return;
+    }
+    if (followNavPath(e)) {
+      if (door.state === 'closed' && typeof setDoorState === 'function') {
+        setDoorState(door, 'open', e);
+      }
+      e.suspicionPhase = 'door_entering';
+      e.searchPath = [{ x: info.searchX, y: info.searchY }];
+      e.searchPathIndex = 0;
+    }
+    return;
+  }
+
+  if (e.suspicionPhase === 'door_entering') {
+    if (followNavPath(e)) {
+      e.suspicionPhase = 'door_searching';
+      e.suspicionSearchAccum = 0;
+    }
+    return;
+  }
+
+  if (e.suspicionPhase === 'door_searching') {
+    e.targetAngle += enemySearchSweepRate();
+    e.suspicionSearchAccum += enemySearchSweepRate();
+    if (e.suspicionSearchAccum >= Math.PI) beginDoorInvestigationReturn(e);
+    return;
+  }
+
+  if (e.suspicionPhase === 'door_exiting') {
+    if (followNavPath(e)) e.suspicionPhase = 'door_closing';
+    return;
+  }
+
+  if (e.suspicionPhase === 'door_closing') {
+    const ownsOpenDoor = door && door.state === 'open' && door.openedBy === e;
+    const blockedByEnemy = ownsOpenDoor && typeof isDoorBlockedByEnemy === 'function' && isDoorBlockedByEnemy(door, e);
+    const blockedByPlayer = ownsOpenDoor && typeof isDoorBlockedByPlayer === 'function' && isDoorBlockedByPlayer(door);
+    const blocked = blockedByEnemy || blockedByPlayer;
+    if (ownsOpenDoor && !blocked && typeof setDoorState === 'function') {
+      setDoorState(door, 'closed');
+    }
+    if (!ownsOpenDoor || !blocked || ++info.closeWaitTimer >= enemySuspicionTimeout()) {
+      beginDoorInvestigationHomePath(e);
+    }
+    return;
+  }
+
+  if (e.suspicionPhase === 'door_returning' && followNavPath(e)) {
+    finishDoorInvestigation(e);
+  }
+}
+
+function beginDamagedDoorInvestigation(e, request, originalAngle) {
+  const door = _getDoorById(request.doorId);
+  if (!door || door.state === 'destroyed' || door.hp >= door.maxHp) {
+    e.damagedDoorInvestigation = null;
+    e.suspicionPhase = 'turning';
+    return;
+  }
+
+  const points = _getDoorInvestigationPoints(door, e.x, e.y);
+  e.suspicionReturnX = e.x;
+  e.suspicionReturnY = e.y;
+  e.suspicionOriginalAngle = originalAngle;
+  e.suspicionReturnPatrolIndex = e.patrolIndex;
+  e.suspicionReturnPauseTimer = e.patrolPauseTimer;
+  e.suspicionReturnSweepAccum = e.patrolSweepAccum;
+  e.suspicionPhase = 'damaged_door_approaching';
+  e.damagedDoorInvestigation = { doorId: request.doorId, ...points, confirmTimer: 0 };
+  e.searchPath = buildPath(e.x, e.y, points.approachX, points.approachY);
+  e.searchPathIndex = 0;
+}
+
+function finishDamagedDoorInvestigation(e) {
+  e.x = e.suspicionReturnX;
+  e.y = e.suspicionReturnY;
+  e.state = 'patrol';
+  e.targetAngle = e.suspicionOriginalAngle;
+  e.patrolIndex = e.suspicionReturnPatrolIndex;
+  e.patrolPauseTimer = e.suspicionReturnPauseTimer;
+  e.patrolSweepAccum = e.suspicionReturnSweepAccum;
+  e.reactionTimer = 0;
+  e.pendingReaction = null;
+  e.suspicionReason = null;
+  e.damagedDoorInvestigation = null;
+}
+
+function updateDamagedDoorInvestigation(e) {
+  const info = e.damagedDoorInvestigation;
+  if (!info) return;
+  const door = _getDoorById(info.doorId);
+  if (!door) {
+    finishDamagedDoorInvestigation(e);
+    return;
+  }
+
+  if (door.state === 'destroyed') {
+    enterEnemyAlert(e, info.searchX, info.searchY, false, 'door');
+    return;
+  }
+
+  if (e.suspicionPhase === 'damaged_door_confirming') {
+    const doorX = door.x + door.w / 2;
+    const doorY = door.y + door.h / 2;
+    e.targetAngle = Math.atan2(doorX - e.x, -(doorY - e.y));
+    if (info.confirmTimer > 0) info.confirmTimer--;
+    if (info.confirmTimer > 0) return;
+    if (door.state === 'closed' && typeof setDoorState === 'function') {
+      setDoorState(door, 'open', e);
+    }
+    enterEnemyAlert(e, info.searchX, info.searchY, false, 'door');
+    return;
+  }
+
+  const inspectRadius = typeof doorInteractRadius === 'function'
+    ? doorInteractRadius()
+    : scaleEnemyUnit(45);
+  const distanceSq = typeof distanceSqToRect === 'function'
+    ? distanceSqToRect(door, e.x, e.y)
+    : (e.x - info.approachX) ** 2 + (e.y - info.approachY) ** 2;
+
+  if (distanceSq > inspectRadius * inspectRadius) {
+    if (followNavPath(e)) _stepEnemyToward(e, info.approachX, info.approachY);
+    return;
+  }
+
+  e.suspicionPhase = 'damaged_door_confirming';
+  info.confirmTimer = enemyDamagedDoorConfirmDelay();
+  if (info.confirmTimer <= 0) updateDamagedDoorInvestigation(e);
+}
+
+function updateAlertDoorTransit(e) {
+  const info = e.alertDoorTransit;
+  if (!info) return;
+  const door = _getDoorById(info.doorId);
+  if (!door) {
+    e.alertDoorTransit = null;
+    return;
+  }
+
+  if (info.phase === 'approaching') {
+    const interactRadius = typeof doorInteractRadius === 'function'
+      ? doorInteractRadius()
+      : scaleEnemyUnit(45);
+    const distanceSq = typeof distanceSqToRect === 'function'
+      ? distanceSqToRect(door, e.x, e.y)
+      : (e.x - info.approachX) ** 2 + (e.y - info.approachY) ** 2;
+
+    if (distanceSq > interactRadius * interactRadius) {
+      if (followNavPath(e)) _stepEnemyToward(e, info.approachX, info.approachY);
+      return;
+    }
+
+    if (door.state === 'closed' && typeof setDoorState === 'function') {
+      setDoorState(door, 'open', e);
+    }
+    info.phase = 'crossing';
+    e.searchPath = [{ x: info.searchX, y: info.searchY }];
+    e.searchPathIndex = 0;
+  }
+
+  if (info.phase === 'crossing') {
+    const dx = info.searchX - e.x;
+    const dy = info.searchY - e.y;
+    if (dx * dx + dy * dy <= enemyArrivalRadius() ** 2) {
+      e.alertDoorTransit = null;
+    } else {
+      _stepEnemyToward(e, info.searchX, info.searchY);
+    }
+  }
+}
+
 function updateEnemies() {
   if (typeof updateSoundEvents === 'function') updateSoundEvents();
   updateEnemyProjectiles();
   if (playerHitFlashTimer > 0) playerHitFlashTimer--;
 
   for (const e of enemies) {
+    e.playerVisibleThisFrame = false;
 
     // 1. Tick reaction delay ??apply pending state change when it expires
     if (e.reactionTimer > 0) {
       e.reactionTimer--;
       if (e.reactionTimer === 0 && e.pendingReaction) {
+        const pending = e.pendingReaction;
+        const previousState = e.state;
         const savedAngle = e.targetAngle; // capture BEFORE overwrite
-        e.state       = e.pendingReaction.state;
-        e.targetAngle = e.pendingReaction.targetAngle;
+        e.state       = pending.state;
+        e.targetAngle = pending.targetAngle;
         if (e.state === 'suspicious') {
           e.suspicionOriginalAngle = savedAngle; // original facing, not the source direction
+          e.suspicionReason = pending.reason;
           e.suspicionTimer  = 0;
           e.suspicionLevel++;
-          e.suspicionSourceX = e.pendingReaction.sourceX;
-          e.suspicionSourceY = e.pendingReaction.sourceY;
-          if (e.suspicionLevel >= 2) {
+          e.suspicionSourceX = pending.sourceX;
+          e.suspicionSourceY = pending.sourceY;
+          if (pending.doorInvestigation) {
+            beginDoorInvestigation(e, pending.doorInvestigation, savedAngle);
+          } else if (pending.damagedDoorInvestigation) {
+            beginDamagedDoorInvestigation(e, pending.damagedDoorInvestigation, savedAngle);
+          } else if (e.suspicionLevel >= 2) {
             e.suspicionPhase      = 'moving';
             e.suspicionReturnX    = e.x;
             e.suspicionReturnY    = e.y;
@@ -792,8 +1226,12 @@ function updateEnemies() {
             e.suspicionPhase = 'turning';
           }
         }
-        if (e.state === 'alert') e.alertTimer = enemyAlertFrames();
-        e.pendingReaction = null;
+        if (e.state === 'alert') {
+          e.state = previousState;
+          enterEnemyAlert(e, pending.sourceX, pending.sourceY, false, pending.reason);
+        } else {
+          e.pendingReaction = null;
+        }
       }
     }
 
@@ -801,25 +1239,33 @@ function updateEnemies() {
     // Patrol/search detection is immediate; suspicious detection must confirm briefly.
     if (enemyCanSeeCone(e)) {
       const angle = Math.atan2(player.x - e.x, -(player.y - e.y));
+      e.playerVisibleThisFrame = true;
       e.targetAngle = angle;
       e.lastKnownX = player.x;
       e.lastKnownY = player.y;
 
       if (e.state === 'suspicious') {
-        scheduleReaction(e, 'alert', angle, player.x, player.y, enemySuspicionConfirmDelay());
+        scheduleReaction(e, 'alert', angle, player.x, player.y, enemySuspicionConfirmDelay(), 'player');
       } else {
-        e.reactionTimer   = 0;
-        e.pendingReaction = null;
-        e.state      = 'alert';
-        e.alertTimer = enemyAlertFrames();
+        enterEnemyAlert(e, player.x, player.y, true, 'player');
       }
     }
-    // 3. Delayed: proximity detection ??only when not already reacting or alert
-    else if (e.reactionTimer === 0 && e.state !== 'alert') {
+    // 3. Local visual evidence, then delayed proximity detection.
+    else if (e.state !== 'alert' && e.reactionTimer === 0 &&
+             !e.doorInvestigation && !e.damagedDoorInvestigation) {
+      const stimulus = detectLocalVisualStimulus(e);
+      if (stimulus?.type === 'door' && stimulus.damaged) {
+        scheduleDamagedDoorInvestigation(e, stimulus.doorId);
+      } else if (stimulus) {
+        enterEnemyAlert(e, stimulus.x, stimulus.y, false, stimulus.type);
+      }
+    }
+
+    if (!e.playerVisibleThisFrame && e.reactionTimer === 0 && e.state !== 'alert') {
       const dx = player.x - e.x, dy = player.y - e.y;
       if (dx * dx + dy * dy <= e.proximityRadius * e.proximityRadius) {
         const angle = Math.atan2(player.x - e.x, -(player.y - e.y));
-        scheduleReaction(e, 'alert', angle);
+        scheduleReaction(e, 'alert', angle, player.x, player.y, enemyReactionDelay(), 'player');
       }
     }
 
@@ -827,7 +1273,11 @@ function updateEnemies() {
     if (e.state === 'suspicious') {
       e.suspicionTimer++;
 
-      if (e.suspicionPhase === 'turning') {
+      if (e.damagedDoorInvestigation) {
+        updateDamagedDoorInvestigation(e);
+      } else if (e.doorInvestigation) {
+        updateDoorInvestigation(e);
+      } else if (e.suspicionPhase === 'turning') {
         if (e.suspicionTimer >= enemySuspicionTimeout()) {
           e.state = 'patrol';
           e.targetAngle = e.suspicionOriginalAngle; // restore original facing
@@ -877,9 +1327,14 @@ function updateEnemies() {
     // Step 2 has already pinned alertTimer to enemyAlertFrames() this frame if player is visible,
     // so the decrement below cannot expire while LOS holds.
     if (e.state === 'alert') {
-      updateAlertBehavior(e);
-      e.alertTimer--;
-      if (e.alertTimer <= 0) {
+      if (e.alertDoorTransit) {
+        updateAlertDoorTransit(e);
+        e.alertTimer = enemyAlertFrames();
+      } else {
+        updateAlertBehavior(e);
+        e.alertTimer--;
+      }
+      if (!e.alertDoorTransit && e.alertTimer <= 0) {
         if (e.lastKnownX !== null) {
           e.state            = 'searching';
           e.searchPath       = buildPath(e.x, e.y, e.lastKnownX, e.lastKnownY);
@@ -1109,6 +1564,60 @@ function drawEnemies() {
   drawEnemyProjectiles();
 }
 
+function enemyIsVisibleToPlayer(e) {
+  if (!isLit(e.x, e.y)) return false;
+  if (typeof playerHasClearView === 'function') return playerHasClearView(e.x, e.y);
+  return inVisionCone(e.x, e.y);
+}
+
+function drawHiddenEnemySilhouette(e) {
+  const isAlert = e.state === 'alert';
+  const isSuspicious = e.state === 'suspicious';
+  const isCautious = e.state === 'searching' || e.state === 'returning' ||
+    (e.state === 'patrol' && e.cautiousTimer > 0);
+
+  ctx.save();
+  ctx.globalAlpha = 0.28;
+  ctx.translate(e.x, e.y);
+  ctx.rotate(e.angle);
+  ctx.scale(scaleEnemyUnit(1), scaleEnemyUnit(1));
+
+  ctx.fillStyle = isAlert ? '#b85a18'
+                : isSuspicious ? '#8f5a24'
+                : isCautious ? '#7d5140'
+                : '#7f4141';
+  ctx.beginPath();
+  ctx.arc(-18, 0, 10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(18, 0, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = isAlert ? '#d87828'
+                : isSuspicious ? '#ad7130'
+                : isCautious ? '#9b6551'
+                : '#a85454';
+  ctx.beginPath();
+  ctx.arc(0, 0, 16, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#c8c8c8';
+  ctx.beginPath();
+  ctx.moveTo(0, -28);
+  ctx.lineTo(-7, -18);
+  ctx.lineTo(7, -18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHiddenEnemiesDebug() {
+  if (!showHiddenEnemiesDebug()) return;
+  for (const e of enemies) {
+    if (!enemyIsVisibleToPlayer(e)) drawHiddenEnemySilhouette(e);
+  }
+}
+
 // Always-visible debug number labels ??drawn after fog in game.js so they show through darkness
 function drawEnemyLabels() {
   if (!showEnemyLabelsDebug()) return;
@@ -1126,6 +1635,13 @@ function drawEnemyLabels() {
     ctx.fill();
     ctx.fillStyle = '#00e5ff';
     ctx.fillText(label, lx, ly);
+    const debugReason = e.state === 'alert' ? e.alertReason
+      : (e.state === 'suspicious' ? e.suspicionReason : null);
+    if (debugReason) {
+      ctx.font = `bold ${scaleEnemyUnit(8)}px monospace`;
+      ctx.fillStyle = '#ffe066';
+      ctx.fillText(debugReason, lx, ly + scaleEnemyUnit(18));
+    }
     ctx.restore();
   }
 }

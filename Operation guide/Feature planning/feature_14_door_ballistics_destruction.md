@@ -1,35 +1,130 @@
-# Feature 14 - Door Ballistics and Destruction Polish
+# Feature 14 - Geometry Ballistics, Penetration, and Impact Events
 
-**Status: Planned for Prototype 2.**
+**Status: Planned for Prototype 2; next local-behavior dependency before facility escalation.**
 
-This feature makes doors behave like meaningful stealth/combat objects by adding bullet holes, penetration, and stronger alert consequences.
+This feature establishes shared projectile behavior for destructible and blocking geometry. It owns penetration, physical door/window damage, bullet holes, and impact events. Feature 13 consumes those impact events for local AI reactions.
 
 ## Goal
 
-Closed doors should record gunfire damage visually, allow bullets to pass through, threaten actors on the other side, and escalate enemy response.
+Bullets should pass through explicitly penetrable geometry, damage actors behind it, stop at explicitly blocking geometry, and produce consistent collision events that sound and AI systems can consume.
 
-## First-Pass Scope
+## Geometry Material Model
 
-- Shooting a closed door creates a persistent bullet hole at the impact point.
-- Bullets can penetrate closed doors and continue past the impact.
-- Penetrating bullets can damage or kill player/enemies behind the door.
-- Door gunfire creates strong sound events.
-- Door penetration/gunfire can trigger enemy alert or high-alert building search.
-- Existing door HP/destruction remains, but direct always-on debug HP presentation should eventually be replaced with better player-facing damage feedback.
+Ballistics must use explicit geometry properties rather than assuming behavior from an object type such as `door`:
 
-## Open Design Details
+- `destructible`: the object has HP and can change to a damaged/destroyed state.
+- `projectileBehavior`: `penetrate` or `block`.
+- `penetrationResistance`: finite power deducted when a penetrable object is crossed; ignored by unconditional blockers.
+- `geometryId` and `geometryType`: stable event/debug identity, not behavioral inference.
 
-- Whether bullet holes are visual-only or also affect sight/sound.
-- Penetration damage falloff through doors.
-- Whether door material or HP changes penetration chance.
-- Whether enemies infer bullet direction or only react to gunfire/impact location.
+The first-pass pairings are:
+
+| Geometry | Destructible | Projectile behavior |
+|----------|--------------|---------------------|
+| Current doors | Yes | Penetrate |
+| Physical windows | Yes | Penetrate |
+| Normal walls | No | Block |
+| Future reinforced/non-destructible door | No | Block |
+
+Keeping destructibility and projectile blocking as explicit fields prevents future non-destructible doors from accidentally inheriting penetration merely because they are doors. It also leaves room for later materials that are indestructible but penetrable, or destructible but initially blocking, without rewriting projectile code.
+
+## Projectile Rules
+
+- Player and enemy projectiles use the same collision/penetration pipeline.
+- Collision uses a swept segment from the previous to the next projectile position and resolves the nearest actor/geometry hit in travel order. Point sampling alone is not sufficient for fast bullets or multiple intersections in one frame.
+- Each projectile has independent `damage` and `penetrationPower` values. Damage controls harm to actors/objects; penetration power controls how many resistant targets the bullet can pass through.
+- Each penetrable actor or geometry target resolves a `penetrationResistance`. After applying that hit's damage, subtract resistance from the projectile's remaining penetration power.
+- If remaining penetration power is greater than zero, the projectile advances just beyond the target's exit face and continues in the same direction. If it reaches zero or below, the projectile stops in that target and is removed.
+- On a `penetrate` geometry hit, the projectile also records the impact, damages the object when `destructible`, and creates a persistent bullet hole where supported.
+- On a `block` geometry hit, the projectile records the impact and is removed.
+- Blocking geometry is terminal regardless of remaining penetration power. Normal walls and configured non-destructible doors do not consume a finite amount and then allow passage.
+- An actor behind penetrable geometry can be hit. Each actor can be damaged by a given projectile only once.
+- Projectiles are also removed at map bounds.
+- A projectile must remember geometry and actors already crossed during its current transit so it cannot repeatedly damage the same panel/actor or emit repeated impact events on consecutive frames while still inside an intersection.
+
+## Actor and Armor Resistance
+
+The first-pass normalized values should make an unobstructed standard bullet capable of hitting at most two unarmored people:
+
+| Source/target | Example penetration value |
+|---------------|---------------------------|
+| Standard bullet initial power | `2.0` |
+| Unarmored body resistance | `1.0` |
+| Bullet-proof covered hit resistance | `2.0` or greater |
+
+- After the first unarmored actor, a standard bullet has `1.0` remaining and continues.
+- The second unarmored actor reduces the remaining power to zero, takes the hit, and stops the bullet. A third actor cannot be hit by that projectile.
+- Damage and penetration resistance are resolved separately. Armor may reduce or transform character damage while still stopping the projectile.
+- Future armor, helmets, and other equipment provide coverage-specific `penetrationResistance` and damage mitigation. On a covered hit, the equipment resistance overrides the body's default resistance rather than being blindly added to it.
+- A bullet-proof item whose resistance is at least the projectile's remaining penetration power stops that bullet on the first protected actor, even if some damage or blunt trauma is still applied.
+- This value model supports stronger future ammunition by assigning higher initial penetration power without hardcoding a two-person rule into collision logic.
+
+## Object Resistance
+
+- Penetrable doors, windows, and future objects have finite `penetrationResistance` values, normally lower than an unarmored body for the current lightweight materials.
+- Every penetrated object reduces remaining power. A bullet may pass through several low-resistance objects, but eventually stops when a later object's resistance exhausts the budget.
+- Object HP and penetration resistance remain separate. A hit can damage an object and still stop in it, or pass through without destroying it.
+- Whether damage state changes resistance is deferred; first pass uses the object's configured material resistance consistently.
+- Exact door/window resistance values belong in tuning. They should permit multiple penetrations during testing without allowing unlimited travel through authored penetrable geometry.
+
+## Doors and Windows
+
+- Shooting a destructible closed door damages it and creates a persistent bullet hole at the entry impact.
+- Whether that hit merely damages or fully destroys the door is separate from penetration. The projectile continues only when its remaining penetration power exceeds the panel's resistance; otherwise it stops in the damaged/destroyed panel.
+- Door opening, closing, movement blocking, ray blocking, lighting apertures, and sound transmission continue to use door state and remain separate from projectile penetration.
+- Physical windows require authored collision/destruction records. Existing lighting-only window apertures are not sufficient hit geometry and must not be treated as destructible merely because their aperture kind is `window`.
+- Destroying a physical window removes its movement/ray/projectile blocking as appropriate and updates its linked lighting aperture.
+- A future non-destructible door sets `destructible: false` and `projectileBehavior: 'block'`; it emits an impact but takes no HP damage and stops the bullet.
+
+## Impact Events and Sound
+
+- Firing creates the existing muzzle sound. Every collision with geometry creates a separate projectile-impact sound, regardless of whether the geometry penetrates or blocks.
+- Muzzle and impact sounds use the same first-pass radius/volume. Their source positions remain distinct.
+- Every projectile and all sounds/impacts derived from it share a stable shot/incident ID.
+- Each impact event includes impact position, incoming direction, source actor/type, geometry ID/type, destructibility, projectile behavior, and whether the hit destroyed the object.
+- Bullet-triggered destruction must not accidentally dispatch duplicate AI confirmations for the same collision. The projectile impact is the canonical collision incident; a separate structural-destruction sound may remain for presentation only if it is linked to the same incident ID and deduplicated by AI.
+- Sound propagation still uses the existing room/door attenuation model. Hearing does not bypass closed doors or walls and does not expose an occluded exact impact position.
+
+## AI Boundary
+
+- Feature 14 emits neutral projectile-impact data and sound events; it does not directly choose enemy states.
+- Feature 13 decides whether each enemy heard or witnessed the impact and chooses suspicious investigation versus immediate alert/search.
+- A single enemy processes one shot/impact through one highest-priority reaction path: direct shooter/muzzle observation, witnessed impact, or heard impact.
+- Building-level severity weights and facility-wide escalation remain deferred until these local reactions are implemented and tuned.
+
+## Compartmentalized Implementation Order
+
+1. Add explicit destructibility/projectile-behavior metadata to walls, current doors, and future physical-window records.
+2. Introduce a shared swept projectile collision result and migrate both player and enemy projectiles to it without changing current terminal-hit behavior.
+3. Add projectile penetration power plus actor/object resistance resolution, including target-hit deduplication.
+4. Add continued travel through actors and penetrable geometry until resistance exhausts the budget or blocking geometry is reached.
+5. Add persistent door bullet-hole records and the physical window data/state boundary.
+6. Emit canonical geometry-impact events and equal-radius muzzle/impact sounds with shared shot IDs.
+7. Add Feature 13 heard-impact suspicious investigation using the acoustically perceived reachable point.
+8. Add Feature 13 witnessed-impact immediate alert and reachable room/connected-space search.
+9. Run map-level tests for collision ordering, two-person maximum with default values, first-hit armor stops, accumulated object resistance, all door orientations, blocking walls, sound attenuation, and heard-versus-witnessed reaction priority.
+10. Tune only after the complete local loop is stable; then proceed to facility escalation weighting.
+
+## Deferred Design Details
+
+- Whether bullet holes create small sight or sound leaks; first pass keeps them visual evidence only.
+- Material-specific speed loss, post-penetration damage falloff, ricochet, and projectile deformation.
+- Damage-state resistance changes, such as an almost-destroyed door becoming easier to penetrate.
+- Advanced inference of shooter position from impact direction. First pass stores direction for debug/future use but does not grant hidden shooter coordinates.
+- Building-level alert severity and communication behavior.
 
 ## Acceptance Criteria
 
-- Door holes are visible and persist until reset.
-- A shot through a door can hit an actor on the far side.
-- Enemies respond strongly to door gunfire/penetration.
-- Door visuals communicate damage more clearly than only debug HP bars.
+- Current destructible doors and physical windows allow penetration; normal walls and configured non-destructible doors stop bullets.
+- Door/window behavior comes from explicit material properties rather than geometry type checks.
+- Bullet holes are visible and persist until reset.
+- With default values, an unobstructed standard bullet can hit two unarmored actors at most and stops on the second.
+- Covered bullet-proof armor can stop that standard bullet on the first protected actor while resolving armor-modified damage separately.
+- Door/window resistance accumulates across penetrations, so bullets can cross multiple lightweight objects but cannot cross an unlimited number.
+- Blocking walls and configured non-destructible doors stop bullets regardless of remaining penetration power.
+- Every geometry collision emits one canonical impact event and an impact sound using the muzzle-sound radius.
+- One shot's muzzle and impact sounds share an incident ID and do not accidentally double-confirm the same AI reaction.
+- Heard-only impacts produce Feature 13 suspicious investigation; witnessed impacts produce immediate alert and reachable connected-space search.
 - Existing door interaction, opening, destruction, sound transmission, and light aperture behavior still works.
 
 ## Related Files
@@ -39,3 +134,4 @@ Closed doors should record gunfire damage visually, allow bullets to pass throug
 - `enemy.js`
 - `sound.js`
 - `tuning.js`
+- `lighting.js`

@@ -94,6 +94,7 @@ const DOORS = DOOR_SPECS.map((door) => ({
   orientation: door.orientation,
   state: 'closed',
   defaultState: 'closed',
+  openedBy: null,
   hp: doorMaxHp(),
   maxHp: doorMaxHp(),
   soundTransmission: doorSoundTransmission(),
@@ -411,9 +412,10 @@ function setDoorApertures(door) {
   }
 }
 
-function setDoorState(door, state) {
+function setDoorState(door, state, openedBy = null) {
   if (door.state === state) return;
   door.state = state;
+  door.openedBy = state === 'open' ? openedBy : null;
   setDoorApertures(door);
   markGeometryDirty();
   markDoorLightingDirty();
@@ -423,6 +425,7 @@ function resetDoors() {
   applyDoorTuning(false);
   for (const door of DOORS) {
     door.state = door.defaultState;
+    door.openedBy = null;
     door.hp = door.maxHp;
     setDoorApertures(door);
   }
@@ -501,16 +504,26 @@ function isDoorVisibleToPlayer(door) {
   return samples.some(p => playerHasClearView(p.x, p.y));
 }
 
-function isDoorBlockedByEnemy(door) {
+function isDoorBlockedByEnemy(door, ignoredEnemy = null) {
   if (typeof enemies === 'undefined') return false;
   const panel = getOpenDoorPanelCorners(door);
   const radius = typeof enemyRadius === 'function' ? enemyRadius() : scaleGameUnit(16);
   const radiusSq = radius * radius;
   for (const enemy of enemies) {
+    if (enemy === ignoredEnemy) continue;
     if (distanceSqToRect(door, enemy.x, enemy.y) <= radiusSq) return true;
     if (distanceSqToPolygon(panel, enemy.x, enemy.y) <= radiusSq) return true;
   }
   return false;
+}
+
+function isDoorBlockedByPlayer(door) {
+  if (typeof player === 'undefined' || !player || player.alive === false) return false;
+  const panel = getOpenDoorPanelCorners(door);
+  const radius = typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS;
+  const radiusSq = radius * radius;
+  return distanceSqToRect(door, player.x, player.y) <= radiusSq ||
+    distanceSqToPolygon(panel, player.x, player.y) <= radiusSq;
 }
 
 function getNearbyDoor(entity, radius = doorInteractRadius()) {
@@ -531,7 +544,8 @@ function toggleNearbyDoor(entity = player) {
   const door = getNearbyDoor(entity);
   if (!door) return false;
   if (isDoorBlockedByEnemy(door)) return true;
-  setDoorState(door, door.state === 'closed' ? 'open' : 'closed');
+  const nextState = door.state === 'closed' ? 'open' : 'closed';
+  setDoorState(door, nextState, nextState === 'open' ? entity : null);
   if (typeof emitSound === 'function') {
     emitSound({
       x: entity.x,
@@ -544,10 +558,19 @@ function toggleNearbyDoor(entity = player) {
   return true;
 }
 
-function openDoorNearEntity(entity, radius = doorInteractRadius()) {
-  const door = getNearbyDoor(entity, radius);
-  if (!door || door.state !== 'closed') return false;
-  setDoorState(door, 'open');
+function openDoorNearEntity(entity, radius = doorInteractRadius(), excludedDoorId = null) {
+  let door = null;
+  let bestD2 = radius * radius;
+  for (const candidate of DOORS) {
+    if (candidate.id === excludedDoorId || candidate.state !== 'closed') continue;
+    const d2 = distanceSqToRect(candidate, entity.x, entity.y);
+    if (d2 <= bestD2) {
+      door = candidate;
+      bestD2 = d2;
+    }
+  }
+  if (!door) return false;
+  setDoorState(door, 'open', entity);
   return true;
 }
 
@@ -560,7 +583,11 @@ function hitDoorAt(x, y) {
   return null;
 }
 
-function damageDoor(door, amount = doorDamage()) {
+function damageDoor(door, amount = doorDamage(), impact = null) {
+  if (amount && typeof amount === 'object') {
+    impact = amount;
+    amount = doorDamage();
+  }
   if (!door || door.state !== 'closed') return false;
   door.hp -= amount;
   if (door.hp <= 0) {
@@ -577,6 +604,14 @@ function damageDoor(door, amount = doorDamage()) {
     }
   } else {
     markDoorLightingDirty();
+  }
+  if (impact && typeof notifyDoorDamaged === 'function') {
+    notifyDoorDamaged(
+      door,
+      typeof impact.x === 'number' ? impact.x : door.x + door.w / 2,
+      typeof impact.y === 'number' ? impact.y : door.y + door.h / 2,
+      impact.sourceActor ?? null
+    );
   }
   return true;
 }
@@ -857,7 +892,14 @@ function update() {
     if (!hit && hitLampAt(p.x, p.y)) hit = true;
     if (!hit) {
       const door = hitDoorAt(p.x, p.y);
-      if (door) hit = damageDoor(door);
+      if (door) {
+        hit = damageDoor(door, {
+          x: p.x,
+          y: p.y,
+          sourceActor: p.sourceActor ?? player,
+          sourceType: p.sourceType ?? 'player',
+        });
+      }
     }
 
     if (hit || hitsWall(p.x, p.y) || p.x < 0 || p.x > GAME_WIDTH || p.y < 0 || p.y > GAME_HEIGHT) {
@@ -1314,6 +1356,7 @@ function draw() {
   drawPlayer();
   measurePerf('lightingMs', drawLighting);
   measurePerf('fogMs', drawFog);
+  drawHiddenEnemiesDebug();
   drawDoorHealthBars();
   drawSoundEvents();
   drawFireGuide();
