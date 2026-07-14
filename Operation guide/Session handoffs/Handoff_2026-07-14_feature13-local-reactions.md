@@ -10,7 +10,7 @@ Number Stations is a top-down Cold War stealth prototype. The current playable b
 
 Feature 13's existing local-reaction subset is implemented. The single next feature is **Feature 14 - Geometry Ballistics, Penetration, and Impact Events**, beginning with the shared ballistics/event foundation required by Feature 13's pending projectile-impact stimuli.
 
-WARNING: At handoff creation, the worktree is intentionally dirty. The user plans to review this document, then commit and push all current changes. Incoming sessions must inspect `git status` and must not revert these changes.
+Checkpoint: the completed Feature 13 local-reaction work and this handoff were committed and pushed on `main` as `004af9f` (`AI Local reaction specified`). At handoff finalization, `main` matched `origin/main` and the worktree was clean. Incoming sessions should still inspect `git status` before editing because newer user changes may exist.
 
 ---
 
@@ -73,21 +73,7 @@ Feature 13 behavior currently lives in the existing Feature 05/07/09 systems and
 | `game.js` | Geometry, doors, player projectile loop | Key helpers: `openDoorNearEntity()`, `hitDoorAt()`, `damageDoor()`, `setDoorState()`, `getMovementBlockers()`, `hitsWall()`. Doors still terminate projectiles. Shared swept collision and penetration are not implemented. |
 | `lighting.js` | Lighting/visibility | Preserve `isLit` versus `isLitByLamps`. Character/corpse observation uses normal lamp visibility; persistent structural door damage intentionally does not require lamp illumination. |
 
-Current dirty worktree before adding this handoff:
-
-```text
- M Live features/feature_05_enemy_sound.md
- M Live features/feature_07_enemy_ai_state_machine.md
- M Operation guide/Feature planning/feature_13_ai_reactions_body_discovery.md
- M Operation guide/Feature planning/feature_14_door_ballistics_destruction.md
- M enemy.js
- M game.js
- M player.js
- M sound.js
- M tuning.js
-```
-
-The new handoff file is additionally untracked until the user stages/commits it.
+Committed baseline: `004af9f` on `main`, pushed to `origin/main`. The Feature 13 code, Feature 05/07 live-doc updates, Feature 13/14 planning updates, tuning changes, and this handoff are all part of that checkpoint.
 
 ### Implemented Feature 13 behavior
 
