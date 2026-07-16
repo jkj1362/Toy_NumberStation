@@ -53,6 +53,7 @@ function playerSprintNoiseScale() { return typeof getTuningNumber === 'function'
 function walkModeStickThreshold() { return typeof getTuningNumber === 'function' ? getTuningNumber('walkModeStickThreshold', WALK_MODE_STICK_THRESHOLD) : WALK_MODE_STICK_THRESHOLD; }
 function playerMaxHealth() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerMaxHealth', PLAYER_MAX_HEALTH) : PLAYER_MAX_HEALTH; }
 function playerProjectileDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerProjectileDamage', PLAYER_PROJECTILE_DAMAGE) : PLAYER_PROJECTILE_DAMAGE; }
+function playerProjectilePenetrationPower() { return typeof getTuningNumber === 'function' ? getTuningNumber('playerProjectilePenetrationPower', 1) : 1; }
 function playerRadius() { return playerTunedUnit('playerRadius', 28); }
 function playerVisionAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('playerVisionAngleDegrees', 120) : VISION_ANGLE; }
 function hardAimVisionMultiplier() { return typeof getTuningNumber === 'function' ? getTuningNumber('hardAimVisionMultiplier', HARD_AIM_VISION_MULTIPLIER) : HARD_AIM_VISION_MULTIPLIER; }
@@ -253,20 +254,24 @@ function updatePlayer(playerInput, activeProjectiles) {
   if (playerInput.shootPressed) {
     const dx = Math.sin(player.angle);
     const dy = -Math.cos(player.angle);
-    activeProjectiles.push({
+    const projectile = createProjectile({
       x: player.x + dx * scalePlayerUnit(20),
       y: player.y + dy * scalePlayerUnit(20),
       vx: dx * scalePlayerUnit(25),
       vy: dy * scalePlayerUnit(25),
       angle: player.angle,
+      damage: playerProjectileDamage(),
+      penetrationPower: playerProjectilePenetrationPower(),
       sourceActor: player,
       sourceType: 'player',
     });
+    activeProjectiles.push(projectile);
     emitSound({
       x: player.x,
       y: player.y,
       radius: typeof soundGunshotRadius === 'function' ? soundGunshotRadius() : GUNSHOT_RADIUS,
       isGunshot: true,
+      shotId: projectile.shotId,
       sourceType: 'player',
       sourceActor: player,
     });

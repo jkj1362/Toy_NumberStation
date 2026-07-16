@@ -25,8 +25,11 @@ Seeing evidence may place an enemy in full alert, but it does not reveal the pla
 - A living enemy detects an enemy corpse only when the corpse is inside its sight range and cone, is visible under the normal lighting rule, and has clear line of sight.
 - The corpse is remembered per observer so it does not retrigger every frame.
 - Discovery immediately enters full alert and records the corpse position as the local investigation position.
+- Newly visible corpse evidence interrupts and clears pending or active door investigations, including a door-impact alert already in progress. The guard immediately enters corpse alert because a body is more severe than damaged-door or muffled-door evidence.
+- Active alert sources use explicit severity precedence (`player` > `corpse` > `door-impact` > `door` > `alerted-enemy` > `sound`). A lower-priority event may refresh the alert timer, but it cannot overwrite the investigation target or the debug overlay's displayed reason.
 - Direct player detection still overrides the evidence reaction and refreshes the player's last known position.
 - A corpse behind a wall or closed door does not alert an enemy.
+- Death emits one low-radius body-fall sound at the victim's position. Nearby guards may investigate that acoustic location under ordinary sound attenuation, but only later visual confirmation upgrades the reason to `corpse`.
 
 ### Damaged or destroyed door
 
@@ -125,6 +128,7 @@ Steps 1-5 must remain local. Step 6 establishes which repeated or severe local e
 ## Acceptance Criteria
 
 - A guard who locally sees an enemy corpse enters alert and investigates the corpse position without tracking the hidden player.
+- A guard that sees a corpse while a door investigation or door alert is pending or active cancels that investigation and immediately enters corpse alert; later door evidence does not replace the corpse reason in the debug overlay.
 - A guard who sees an intact damaged door becomes suspicious, approaches without opening it early, and stops for the configured close-inspection delay at interaction range before escalating.
 - On close inspection, that guard enters alert, opens the damaged door, crosses, and performs the ordinary unknown-source search in the connected room.
 - A guard that directly witnesses a bullet damage the door enters alert immediately and skips the inspection sequence.

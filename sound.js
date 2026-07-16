@@ -21,7 +21,9 @@ function soundTunedUnit(key, fallback) {
 }
 
 function soundGunshotRadius() { return soundTunedUnit('soundGunshotRadius', 350); }
+function soundProjectileImpactRadius() { return soundTunedUnit('soundProjectileImpactRadius', 220); }
 function soundFootstepRadius() { return soundTunedUnit('soundFootstepRadius', 120); }
+function soundBodyFallRadius() { return soundTunedUnit('soundBodyFallRadius', 140); }
 function soundWallTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundWallTransmission', SOUND_WALL_TRANSMISSION) : SOUND_WALL_TRANSMISSION; }
 function soundDefaultClosedDoorTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundClosedDoorTransmission', SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION) : SOUND_DEFAULT_CLOSED_DOOR_TRANSMISSION; }
 function soundVagueSourceDistance() { return soundTunedUnit('soundVagueSourceDistance', 75); }
@@ -508,6 +510,8 @@ function emitSoundEvent(sound) {
     radius: sound.radius,
     life: soundLifetime(),
     sourceType: sound.sourceType ?? 'unknown',
+    shotId: sound.shotId,
+    isProjectileImpact: sound.isProjectileImpact === true,
   };
   soundEvents.push(event);
   evaluateAndPushPlayerSoundCue(sound);
@@ -771,9 +775,9 @@ function drawSoundEvents() {
     ctx.restore();
   }
 
-  if (!showSoundSourceDebug()) return;
-
+  const showAllSoundSources = showSoundSourceDebug();
   for (const s of soundEvents) {
+    if (!showAllSoundSources && !s.isProjectileImpact) continue;
     const progress  = 1 - s.life / soundLifetime();
     const r         = s.radius * (0.2 + progress * 0.8);
     const alpha     = (s.life / soundLifetime()) * 0.6;

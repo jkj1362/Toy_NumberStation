@@ -120,3 +120,12 @@ Use these locations:
 - `Operation guide/` root contains common operation docs such as `AGENT.md` and `session handoff format.md`.
 
 Feature planning docs and live feature docs must match one-to-one by feature. If there is a planning doc such as `Operation guide/Feature planning/feature_02_lighting.md`, there must also be a live-state doc such as `Live features/feature_02_lighting.md`.
+
+### Documentation Update Workflow
+
+- During implementation work, including user-requested fixes and follow-up adjustments, update only the corresponding feature planning/implementation document in `Operation guide/Feature planning/` after the work is complete.
+- Do not automatically update any document in `Live features/` during those implementation or fix iterations.
+- Update the relevant live feature document only when the user explicitly requests a live-document update at the end of the day's work before committing and pushing.
+- At that explicit synchronization point, audit the final game implementation and make the live feature document accurately describe the complete current state. Do not merely copy intermediate planning text.
+- A request to commit or push does not by itself authorize live-document changes; the user must explicitly request the live-feature update.
+- The one-to-one mirroring rule requires both documents to exist, but it does not require the live document to be synchronized after every implementation change.

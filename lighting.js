@@ -90,7 +90,10 @@ function initLighting(missionLighting) {
     ...scaleLightingRect(zone),
     ambient: clampLight(zone.ambient ?? 0),
   }));
-  lightingLamps = (missionLighting.lamps ?? []).map(scaleLightingLamp);
+  lightingLamps = (missionLighting.lamps ?? []).map((lamp, index) => ({
+    ...scaleLightingLamp(lamp),
+    projectileTargetId: `lamp_${index + 1}`,
+  }));
   for (const lamp of lightingLamps) {
     lamp.visibilityPolygon = computeLampVisibilityPolygon(lamp);
   }
@@ -390,19 +393,28 @@ function isLitByLamps(wx, wy) {
   return getLightLevel(wx, wy, { includePlayerGlow: false }) >= enemyBrightLightThreshold();
 }
 
-function hitLampAt(wx, wy) {
+function getProjectileLampTargets() {
   const hitRadius = scaleGameUnit(10);
-  for (const lamp of lightingLamps) {
-    if (!lamp.active) continue;
-    const dx = wx - lamp.lightX;
-    const dy = wy - lamp.lightY;
-    if (dx * dx + dy * dy <= hitRadius * hitRadius) {
-      lamp.active = false;
-      markStaticLightingDirty();
-      return true;
-    }
-  }
-  return false;
+  return lightingLamps
+    .filter(lamp => lamp.active)
+    .map(lamp => ({
+      id: lamp.projectileTargetId,
+      lamp,
+      x: lamp.lightX,
+      y: lamp.lightY,
+      radius: hitRadius,
+      geometryId: lamp.projectileTargetId,
+      geometryType: 'lamp',
+      destructible: true,
+      projectileBehavior: 'block',
+    }));
+}
+
+function destroyLamp(lamp) {
+  if (!lamp || !lamp.active) return false;
+  lamp.active = false;
+  markStaticLightingDirty();
+  return true;
 }
 
 function applyDarknessCutout(alpha) {

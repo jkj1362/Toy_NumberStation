@@ -2,12 +2,13 @@
 
 **Live status: Implemented, with first-pass portal graph, wall/door attenuation, and runtime tuning.**
 
-Sound is event-radius based with per-listener acoustic attenuation. Footsteps, gunshots, door interaction, and door destruction can create sound events that enemies react to.
+Sound is event-radius based with per-listener acoustic attenuation. Footsteps, gunshots, body falls, door interaction, and door destruction can create sound events that enemies react to.
 The propagation and debug-visualization code lives in `sound.js`; enemy AI reactions remain in `enemy.js`.
 
 ## Current Behavior
 
 - Player footsteps emit periodic sound events while moving.
+- An enemy death emits one quiet, tunable body-fall event at the death position. Nearby guards hear it through the normal acoustic path and react to the location as an unknown sound; it does not reveal the player or identify the corpse through walls.
 - Footstep radius scales with the player's current noise scale.
 - Gunshots emit a larger sound event.
 - If an enemy directly observes a gunshot/muzzle event in its cone and line of sight, it alerts immediately.

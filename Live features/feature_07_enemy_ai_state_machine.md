@@ -23,7 +23,9 @@ Enemies run a state machine covering patrol, suspicious reaction, alert pursuit/
 ## Current Caveats
 
 - Pathfinding uses a small hardcoded navigation graph, not a full navmesh.
-- Defeated enemies leave non-blocking corpses. Local corpse, damaged-door, and alerted-companion reactions are implemented; facility-wide escalation is still pending.
+- Defeated enemies leave non-blocking corpses. Local corpse, damaged-door, and alerted-companion reactions are implemented; a newly visible corpse immediately overrides pending or active door investigations, including an active door-impact alert.
+- Alert causes have explicit precedence (`player` > `corpse` > `door-impact` > `door` > `alerted-enemy` > `sound`). Lower-priority events can refresh alert duration but do not replace the current target or the debug reason label. Facility-wide escalation is still pending.
+- Enemy debug labels identify `ALERT` reasons in orange-red and `SUSPICIOUS` reasons in yellow so multiple guards' non-default reactions can be distinguished at a glance.
 - The precision archetype exists as a behavior branch but currently delegates to shooter behavior.
 
 ## Related Files

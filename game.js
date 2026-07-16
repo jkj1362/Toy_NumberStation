@@ -53,36 +53,42 @@ const WALLS = [
   // x=900 is within corridor right (x=860-1082) so top connects cleanly
   { x:  900, y: 440, w:  18, h: 100 },
   { x:  900, y: 640, w:  18, h:  92 },
-].map(scaleGameRect);
+].map((wall, index) => ({
+  ...scaleGameRect(wall),
+  geometryId: `wall_${index}`,
+  geometryType: 'wall',
+  destructible: false,
+  projectileBehavior: 'block',
+}));
 
 const DOOR_SPECS = [
   {
     id: 'corridor_left_door',
-    x: 220, y: 440, w: 100, h: 18,
+    x: 220, y: 446, w: 100, h: 6,
     orientation: 'horizontal',
     apertureIds: ['corridor_left_door_n', 'corridor_left_door_s'],
   },
   {
     id: 'corridor_right_door',
-    x: 778, y: 440, w: 82, h: 18,
+    x: 778, y: 446, w: 82, h: 6,
     orientation: 'horizontal',
     apertureIds: ['corridor_right_door_n', 'corridor_right_door_s'],
   },
   {
     id: 'room_a_east_door',
-    x: 400, y: 250, w: 18, h: 90,
+    x: 406, y: 250, w: 6, h: 90,
     orientation: 'vertical',
     apertureIds: ['room_a_east_door_e', 'room_a_east_door_w'],
   },
   {
     id: 'room_bc_divider_door',
-    x: 760, y: 160, w: 18, h: 100,
+    x: 766, y: 160, w: 6, h: 100,
     orientation: 'vertical',
     apertureIds: ['room_bc_divider_door_e', 'room_bc_divider_door_w'],
   },
   {
     id: 'room_f_west_door',
-    x: 900, y: 540, w: 18, h: 100,
+    x: 906, y: 540, w: 6, h: 100,
     orientation: 'vertical',
     apertureIds: ['room_f_west_door_e', 'room_f_west_door_w'],
   },
@@ -95,6 +101,12 @@ const DOORS = DOOR_SPECS.map((door) => ({
   state: 'closed',
   defaultState: 'closed',
   openedBy: null,
+  destructible: true,
+  projectileBehavior: 'penetrate',
+  penetrationResistance: doorProjectileResistance(),
+  bulletHoles: [],
+  swingProgress: 0,
+  swingDirection: 1,
   hp: doorMaxHp(),
   maxHp: doorMaxHp(),
   soundTransmission: doorSoundTransmission(),
@@ -102,6 +114,8 @@ const DOORS = DOOR_SPECS.map((door) => ({
 }));
 
 const projectiles = [];
+const projectileImpactEvents = [];
+let nextProjectileShotId = 1;
 
 const CAM_SOFT_LOOKAHEAD_DIST = Math.min(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) * 0.10;
 const CAM_HARDAIM_DIST = Math.max(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
@@ -222,6 +236,9 @@ function gameTunedUnit(key, fallback) {
 function doorMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorMaxHp', 60) : 60; }
 function doorSoundTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundClosedDoorTransmission', 0.8) : 0.8; }
 function doorDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorDamage', DOOR_DAMAGE) : DOOR_DAMAGE; }
+function doorProjectileResistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorProjectileResistance', 0.5) : 0.5; }
+function doorSwingFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorSwingFrames', 12) : 12; }
+function unarmoredBodyPenetrationResistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('unarmoredBodyPenetrationResistance', 1) : 1; }
 function doorInteractRadius() { return gameTunedUnit('doorInteractRadius', 45); }
 function doorOpenAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('doorOpenAngleDegrees', 75) : DOOR_OPEN_ANGLE; }
 function interactRadius() { return gameTunedUnit('interactRadius', 30); }
@@ -270,38 +287,49 @@ function rotateDoorPoint(x, y, angle) {
   };
 }
 
-function getOpenDoorPanelCorners(door) {
+function getDoorHinge(door) {
   if (door.orientation === 'horizontal') {
-    const hingeX = door.x;
-    const hingeY = door.y + door.h / 2;
-    return [
-      { x: 0, y: -door.h / 2 },
-      { x: door.w, y: -door.h / 2 },
-      { x: door.w, y: door.h / 2 },
-      { x: 0, y: door.h / 2 },
-    ].map((p) => {
-      const rotated = rotateDoorPoint(p.x, p.y, -doorOpenAngle());
-      return { x: hingeX + rotated.x, y: hingeY + rotated.y };
-    });
+    return { x: door.x, y: door.y + door.h / 2, rectX: 0, rectY: -door.h / 2 };
   }
 
-  const hingeX = door.x + door.w / 2;
-  const hingeY = door.y;
+  return { x: door.x + door.w / 2, y: door.y, rectX: -door.w / 2, rectY: 0 };
+}
+
+function getDoorSwingAngle(door) {
+  return (door.swingDirection ?? 1) * doorOpenAngle() * (door.swingProgress ?? 0);
+}
+
+function getDoorPanelCorners(door) {
+  const hinge = getDoorHinge(door);
+  const angle = getDoorSwingAngle(door);
   return [
-    { x: -door.w / 2, y: 0 },
-    { x: door.w / 2, y: 0 },
-    { x: door.w / 2, y: door.h },
-    { x: -door.w / 2, y: door.h },
+    { x: hinge.rectX, y: hinge.rectY },
+    { x: hinge.rectX + door.w, y: hinge.rectY },
+    { x: hinge.rectX + door.w, y: hinge.rectY + door.h },
+    { x: hinge.rectX, y: hinge.rectY + door.h },
   ].map((p) => {
-    const rotated = rotateDoorPoint(p.x, p.y, doorOpenAngle());
-    return { x: hingeX + rotated.x, y: hingeY + rotated.y };
+    const rotated = rotateDoorPoint(p.x, p.y, angle);
+    return { x: hinge.x + rotated.x, y: hinge.y + rotated.y };
   });
+}
+
+function getDoorLocalPoint(door, x, y) {
+  const hinge = getDoorHinge(door);
+  return rotateDoorPoint(x - hinge.x, y - hinge.y, -getDoorSwingAngle(door));
+}
+
+function getDoorOpeningDirection(door, opener) {
+  if (!opener) return door.swingDirection;
+
+  return door.orientation === 'horizontal'
+    ? (opener.y >= door.y + door.h / 2 ? -1 : 1)
+    : (opener.x >= door.x + door.w / 2 ? 1 : -1);
 }
 
 function getRayBlockerPolygons() {
   return DOORS
     .filter(door => door.state === 'open')
-    .map(getOpenDoorPanelCorners);
+    .map(getDoorPanelCorners);
 }
 
 // Precomputed wall segments and corners for visibility raycasting (static — walls never move)
@@ -414,8 +442,10 @@ function setDoorApertures(door) {
 
 function setDoorState(door, state, openedBy = null) {
   if (door.state === state) return;
+  if (state === 'open') door.swingDirection = getDoorOpeningDirection(door, openedBy);
   door.state = state;
   door.openedBy = state === 'open' ? openedBy : null;
+  if (state === 'destroyed') door.swingProgress = 0;
   setDoorApertures(door);
   markGeometryDirty();
   markDoorLightingDirty();
@@ -427,6 +457,9 @@ function resetDoors() {
     door.state = door.defaultState;
     door.openedBy = null;
     door.hp = door.maxHp;
+    door.bulletHoles.length = 0;
+    door.swingProgress = 0;
+    door.swingDirection = 1;
     setDoorApertures(door);
   }
   markGeometryDirty();
@@ -445,15 +478,18 @@ function distanceSqToRect(rect, x, y) {
   return (x - p.x) ** 2 + (y - p.y) ** 2;
 }
 
-function distanceSqToSegment(px, py, ax, ay, bx, by) {
+function closestPointOnSegment(px, py, ax, ay, bx, by) {
   const abx = bx - ax;
   const aby = by - ay;
   const len2 = abx * abx + aby * aby;
-  if (len2 === 0) return (px - ax) ** 2 + (py - ay) ** 2;
+  if (len2 === 0) return { x: ax, y: ay };
   const t = clamp(((px - ax) * abx + (py - ay) * aby) / len2, 0, 1);
-  const cx = ax + abx * t;
-  const cy = ay + aby * t;
-  return (px - cx) ** 2 + (py - cy) ** 2;
+  return { x: ax + abx * t, y: ay + aby * t };
+}
+
+function distanceSqToSegment(px, py, ax, ay, bx, by) {
+  const closest = closestPointOnSegment(px, py, ax, ay, bx, by);
+  return (px - closest.x) ** 2 + (py - closest.y) ** 2;
 }
 
 function pointInDoorPolygon(poly, x, y) {
@@ -480,6 +516,23 @@ function distanceSqToPolygon(poly, x, y) {
   return best;
 }
 
+function updateDoorAnimations() {
+  let changed = false;
+  for (const door of DOORS) {
+    const target = door.state === 'open' ? 1 : 0;
+    const next = Math.abs(door.swingProgress - target) <= 1 / doorSwingFrames()
+      ? target
+      : door.swingProgress + Math.sign(target - door.swingProgress) / doorSwingFrames();
+    if (next === door.swingProgress) continue;
+    door.swingProgress = next;
+    changed = true;
+  }
+  if (changed) {
+    markGeometryDirty();
+    markDoorLightingDirty();
+  }
+}
+
 function playerHasClearView(wx, wy) {
   if (!inVisionCone(wx, wy)) return false;
   const angle = Math.atan2(wy - player.y, wx - player.x);
@@ -492,21 +545,30 @@ function playerHasClearView(wx, wy) {
 }
 
 function isDoorVisibleToPlayer(door) {
-  const closest = closestPointOnRect(door, player.x, player.y);
-  const samples = [
-    closest,
-    { x: door.x + door.w / 2, y: door.y + door.h / 2 },
-    { x: door.x,              y: door.y + door.h / 2 },
-    { x: door.x + door.w,     y: door.y + door.h / 2 },
-    { x: door.x + door.w / 2, y: door.y },
-    { x: door.x + door.w / 2, y: door.y + door.h },
-  ];
+  const panel = getDoorPanelCorners(door);
+  const center = panel.reduce((sum, point) => ({
+    x: sum.x + point.x / panel.length,
+    y: sum.y + point.y / panel.length,
+  }), { x: 0, y: 0 });
+  let closest = null;
+  let closestDistance = Infinity;
+  for (let i = 0; i < panel.length; i++) {
+    const a = panel[i];
+    const b = panel[(i + 1) % panel.length];
+    const point = closestPointOnSegment(player.x, player.y, a.x, a.y, b.x, b.y);
+    const distance = (player.x - point.x) ** 2 + (player.y - point.y) ** 2;
+    if (distance < closestDistance) {
+      closest = point;
+      closestDistance = distance;
+    }
+  }
+  const samples = [closest, center, ...panel];
   return samples.some(p => playerHasClearView(p.x, p.y));
 }
 
 function isDoorBlockedByEnemy(door, ignoredEnemy = null) {
   if (typeof enemies === 'undefined') return false;
-  const panel = getOpenDoorPanelCorners(door);
+  const panel = getDoorPanelCorners(door);
   const radius = typeof enemyRadius === 'function' ? enemyRadius() : scaleGameUnit(16);
   const radiusSq = radius * radius;
   for (const enemy of enemies) {
@@ -519,7 +581,7 @@ function isDoorBlockedByEnemy(door, ignoredEnemy = null) {
 
 function isDoorBlockedByPlayer(door) {
   if (typeof player === 'undefined' || !player || player.alive === false) return false;
-  const panel = getOpenDoorPanelCorners(door);
+  const panel = getDoorPanelCorners(door);
   const radius = typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS;
   const radiusSq = radius * radius;
   return distanceSqToRect(door, player.x, player.y) <= radiusSq ||
@@ -588,7 +650,11 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
     impact = amount;
     amount = doorDamage();
   }
-  if (!door || door.state !== 'closed') return false;
+  if (!door || door.state === 'destroyed') return false;
+  if (impact && typeof impact.x === 'number' && typeof impact.y === 'number') {
+    door.bulletHoles.push(getDoorLocalPoint(door, impact.x, impact.y));
+    if (door.bulletHoles.length > 24) door.bulletHoles.shift();
+  }
   door.hp -= amount;
   if (door.hp <= 0) {
     door.hp = 0;
@@ -600,6 +666,8 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
         radius: scaleGameUnit(240),
         sourceType: 'door',
         sourceActor: door,
+        shotId: impact?.shotId,
+        canAlertEnemies: impact?.shotId ? false : undefined,
       });
     }
   } else {
@@ -686,6 +754,214 @@ function hitsWall(x, y) {
         y >= wall.y && y <= wall.y + wall.h) return true;
   }
   return false;
+}
+
+function createProjectile(data) {
+  return {
+    ...data,
+    shotId: nextProjectileShotId++,
+    hitTargetIds: new Set(),
+  };
+}
+
+function segmentCircleIntersection(x1, y1, x2, y2, cx, cy, radius) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const fx = x1 - cx;
+  const fy = y1 - cy;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - radius * radius;
+  const discriminant = b * b - 4 * a * c;
+  if (a === 0 || discriminant < 0) return null;
+
+  const root = Math.sqrt(discriminant);
+  const entry = (-b - root) / (2 * a);
+  const exit = (-b + root) / (2 * a);
+  if (exit < 0 || entry > 1) return null;
+  return { t: Math.max(0, entry), exitT: Math.min(1, exit) };
+}
+
+function segmentRectIntersection(x1, y1, x2, y2, rect) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  let entry = 0;
+  let exit = 1;
+
+  for (const [start, delta, min, max] of [[x1, dx, rect.x, rect.x + rect.w], [y1, dy, rect.y, rect.y + rect.h]]) {
+    if (delta === 0) {
+      if (start < min || start > max) return null;
+      continue;
+    }
+    const t1 = (min - start) / delta;
+    const t2 = (max - start) / delta;
+    entry = Math.max(entry, Math.min(t1, t2));
+    exit = Math.min(exit, Math.max(t1, t2));
+    if (entry > exit) return null;
+  }
+
+  return { t: entry, exitT: exit };
+}
+
+function segmentPolygonIntersection(x1, y1, x2, y2, polygon) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const hits = [];
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const denominator = dx * ey - dy * ex;
+    if (Math.abs(denominator) < 0.000001) continue;
+    const ax = a.x - x1;
+    const ay = a.y - y1;
+    const t = (ax * ey - ay * ex) / denominator;
+    const u = (ax * dy - ay * dx) / denominator;
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) hits.push(t);
+  }
+  if (!hits.length) return null;
+  hits.sort((a, b) => a - b);
+  const startsInside = pointInDoorPolygon(polygon, x1, y1);
+  return {
+    t: startsInside ? 0 : hits[0],
+    exitT: startsInside ? hits[0] : (hits[1] ?? hits[0]),
+  };
+}
+
+function getProjectileCollision(projectile, x1, y1, x2, y2, actorTargets) {
+  const candidates = [];
+  for (const target of actorTargets) {
+    if (projectile.hitTargetIds.has(target.id)) continue;
+    const hit = segmentCircleIntersection(x1, y1, x2, y2, target.actor.x, target.actor.y, target.radius);
+    if (hit) candidates.push({ ...hit, kind: 'actor', target });
+  }
+
+  const lampTargets = typeof getProjectileLampTargets === 'function' ? getProjectileLampTargets() : [];
+  for (const target of lampTargets) {
+    if (projectile.hitTargetIds.has(target.id)) continue;
+    const hit = segmentCircleIntersection(x1, y1, x2, y2, target.x, target.y, target.radius);
+    if (hit) candidates.push({ ...hit, kind: 'lamp', target });
+  }
+
+  for (const wall of WALLS) {
+    const hit = segmentRectIntersection(x1, y1, x2, y2, wall);
+    if (hit) candidates.push({ ...hit, kind: 'geometry', target: wall });
+  }
+  for (const door of DOORS) {
+    if (door.state === 'destroyed' || projectile.hitTargetIds.has(door.id)) continue;
+    const hit = segmentPolygonIntersection(x1, y1, x2, y2, getDoorPanelCorners(door));
+    if (hit) candidates.push({ ...hit, kind: 'geometry', target: door });
+  }
+
+  const collisionPriority = { actor: 0, lamp: 1, geometry: 2 };
+  candidates.sort((a, b) => {
+    if (a.t !== b.t) return a.t - b.t;
+    return collisionPriority[a.kind] - collisionPriority[b.kind];
+  });
+  return candidates[0] ?? null;
+}
+
+function emitProjectileImpact(projectile, target, x, y) {
+  const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
+  const event = {
+    shotId: projectile.shotId,
+    x,
+    y,
+    incomingX: projectile.vx / speed,
+    incomingY: projectile.vy / speed,
+    sourceActor: projectile.sourceActor,
+    sourceType: projectile.sourceType,
+    geometryId: target.id ?? target.geometryId,
+    geometryType: target.geometryType,
+    destructible: target.destructible === true,
+    projectileBehavior: target.projectileBehavior,
+    destroyed: target.state === 'destroyed',
+  };
+  projectileImpactEvents.push(event);
+  if (projectileImpactEvents.length > 128) projectileImpactEvents.shift();
+
+  if (typeof emitSound === 'function') {
+    emitSound({
+      x,
+      y,
+      radius: typeof soundProjectileImpactRadius === 'function' ? soundProjectileImpactRadius() : scaleGameUnit(220),
+      sourceType: projectile.sourceType,
+      sourceActor: projectile.sourceActor,
+      shotId: projectile.shotId,
+      isProjectileImpact: true,
+      canAlertEnemies: false,
+    });
+  }
+}
+
+function resolveProjectileTravel(projectile, getActorTargets, onActorHit) {
+  let startX = projectile.x;
+  let startY = projectile.y;
+  const endX = startX + projectile.vx;
+  const endY = startY + projectile.vy;
+
+  for (let remainingHits = 12; remainingHits > 0; remainingHits--) {
+    const hit = getProjectileCollision(projectile, startX, startY, endX, endY, getActorTargets());
+    if (!hit) {
+      projectile.x = endX;
+      projectile.y = endY;
+      return true;
+    }
+
+    const hitX = startX + (endX - startX) * hit.t;
+    const hitY = startY + (endY - startY) * hit.t;
+    if (hit.kind === 'actor') {
+      projectile.hitTargetIds.add(hit.target.id);
+      onActorHit(hit.target.actor);
+      projectile.penetrationPower -= hit.target.penetrationResistance;
+    } else if (hit.kind === 'lamp') {
+      projectile.hitTargetIds.add(hit.target.id);
+      if (typeof destroyLamp === 'function') destroyLamp(hit.target.lamp);
+      emitProjectileImpact(projectile, hit.target, hitX, hitY);
+      projectile.x = hitX;
+      projectile.y = hitY;
+      return false;
+    } else {
+      const target = hit.target;
+      projectile.hitTargetIds.add(target.id ?? target.geometryId);
+      let destroyed = false;
+      if (target.destructible && typeof damageDoor === 'function') {
+        damageDoor(target, doorDamage(), {
+          x: hitX,
+          y: hitY,
+          sourceActor: projectile.sourceActor,
+          sourceType: projectile.sourceType,
+          shotId: projectile.shotId,
+        });
+        destroyed = target.state === 'destroyed';
+      }
+      emitProjectileImpact(projectile, target, hitX, hitY);
+      projectileImpactEvents[projectileImpactEvents.length - 1].destroyed = destroyed;
+      if (target.projectileBehavior === 'block') {
+        projectile.x = hitX;
+        projectile.y = hitY;
+        return false;
+      }
+      projectile.penetrationPower -= target.geometryType === 'door'
+        ? doorProjectileResistance()
+        : target.penetrationResistance;
+    }
+
+    if (projectile.penetrationPower <= 0) {
+      projectile.x = hitX;
+      projectile.y = hitY;
+      return false;
+    }
+
+    const nextT = Math.min(1, hit.exitT + 0.0001);
+    startX += (endX - startX) * nextT;
+    startY += (endY - startY) * nextT;
+  }
+
+  projectile.x = endX;
+  projectile.y = endY;
+  return true;
 }
 
 function clamp(v, min, max) {
@@ -820,6 +1096,7 @@ function update() {
 
   if (gamePhase === 'gameover') return;
 
+  updateDoorAnimations();
   updatePlayer(input, projectiles);
   updateCamera(hardAimHeld);
 
@@ -869,40 +1146,20 @@ function update() {
   // Move, collide, and cull projectiles
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
-    p.x += p.vx;
-    p.y += p.vy;
-
-    let hit = false;
-    for (let j = enemies.length - 1; j >= 0; j--) {
-      const e = enemies[j];
-      const dx = p.x - e.x;
-      const dy = p.y - e.y;
-      const hitRadius = typeof enemyHitRadius === 'function' ? enemyHitRadius() : ENEMY_HIT_RADIUS;
-      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
-        const damage = typeof playerProjectileDamage === 'function' ? playerProjectileDamage() : PLAYER_PROJECTILE_DAMAGE;
-        if (typeof damageEnemy === 'function' && damageEnemy(e, damage)) {
-          addEnemyCorpse(e);
-          enemies.splice(j, 1);
-        }
-        hit = true;
-        break;
+    const survives = resolveProjectileTravel(p, () => enemies.map((e, index) => ({
+      id: e.projectileTargetId ?? `enemy_${index}`,
+      actor: e,
+      radius: typeof enemyHitRadius === 'function' ? enemyHitRadius() : ENEMY_HIT_RADIUS,
+      penetrationResistance: unarmoredBodyPenetrationResistance(),
+    })), (enemy) => {
+      if (typeof damageEnemy === 'function' && damageEnemy(enemy, p.damage)) {
+        addEnemyCorpse(enemy);
+        const index = enemies.indexOf(enemy);
+        if (index >= 0) enemies.splice(index, 1);
       }
-    }
+    });
 
-    if (!hit && hitLampAt(p.x, p.y)) hit = true;
-    if (!hit) {
-      const door = hitDoorAt(p.x, p.y);
-      if (door) {
-        hit = damageDoor(door, {
-          x: p.x,
-          y: p.y,
-          sourceActor: p.sourceActor ?? player,
-          sourceType: p.sourceType ?? 'player',
-        });
-      }
-    }
-
-    if (hit || hitsWall(p.x, p.y) || p.x < 0 || p.x > GAME_WIDTH || p.y < 0 || p.y > GAME_HEIGHT) {
+    if (!survives || p.x < 0 || p.x > GAME_WIDTH || p.y < 0 || p.y > GAME_HEIGHT) {
       projectiles.splice(i, 1);
     }
   }
@@ -923,31 +1180,20 @@ function drawWalls() {
 function drawDoors() {
   for (const door of DOORS) {
     ctx.save();
-    if (door.state === 'closed') {
+    if (door.state !== 'destroyed') {
+      const hinge = getDoorHinge(door);
+      ctx.translate(hinge.x, hinge.y);
+      ctx.rotate(getDoorSwingAngle(door));
       ctx.fillStyle = '#2b2220';
-      ctx.fillRect(door.x, door.y, door.w, door.h);
+      ctx.fillRect(hinge.rectX, hinge.rectY, door.w, door.h);
       ctx.strokeStyle = '#8a6a42';
       ctx.lineWidth = scaleGameUnit(2);
-      ctx.strokeRect(door.x, door.y, door.w, door.h);
-
-    } else if (door.state === 'open') {
-      ctx.fillStyle = '#2b2220';
-      ctx.strokeStyle = '#8a6a42';
-      ctx.lineWidth = scaleGameUnit(2);
-      if (door.orientation === 'horizontal') {
-        const hingeX = door.x;
-        const hingeY = door.y + door.h / 2;
-        ctx.translate(hingeX, hingeY);
-        ctx.rotate(-doorOpenAngle());
-        ctx.fillRect(0, -door.h / 2, door.w, door.h);
-        ctx.strokeRect(0, -door.h / 2, door.w, door.h);
-      } else {
-        const hingeX = door.x + door.w / 2;
-        const hingeY = door.y;
-        ctx.translate(hingeX, hingeY);
-        ctx.rotate(doorOpenAngle());
-        ctx.fillRect(-door.w / 2, 0, door.w, door.h);
-        ctx.strokeRect(-door.w / 2, 0, door.w, door.h);
+      ctx.strokeRect(hinge.rectX, hinge.rectY, door.w, door.h);
+      ctx.fillStyle = '#090706';
+      for (const hole of door.bulletHoles) {
+        ctx.beginPath();
+        ctx.arc(hole.x, hole.y, scaleGameUnit(2), 0, Math.PI * 2);
+        ctx.fill();
       }
     } else {
       ctx.fillStyle = 'rgba(138,106,66,0.75)';
@@ -993,23 +1239,26 @@ function drawCorpses() {
 function drawDoorHealthBars() {
   if (!showDoorHpBars()) return;
   for (const door of DOORS) {
-    if (door.state !== 'closed' || !isDoorVisibleToPlayer(door)) continue;
+    if (door.state === 'destroyed' || !isDoorVisibleToPlayer(door)) continue;
     const hpRatio = door.hp / door.maxHp;
     const barPad = scaleGameUnit(4);
     const barThickness = scaleGameUnit(4);
+    const hinge = getDoorHinge(door);
 
     ctx.save();
+    ctx.translate(hinge.x, hinge.y);
+    ctx.rotate(getDoorSwingAngle(door));
     ctx.fillStyle = 'rgba(20,18,14,0.88)';
     if (door.orientation === 'horizontal') {
-      const barY = door.y - barPad - barThickness;
-      ctx.fillRect(door.x, barY, door.w, barThickness);
+      const barY = hinge.rectY - barPad - barThickness;
+      ctx.fillRect(hinge.rectX, barY, door.w, barThickness);
       ctx.fillStyle = 'rgba(255,224,102,0.95)';
-      ctx.fillRect(door.x, barY, door.w * hpRatio, barThickness);
+      ctx.fillRect(hinge.rectX, barY, door.w * hpRatio, barThickness);
     } else {
-      const barX = door.x - barPad - barThickness;
-      ctx.fillRect(barX, door.y, barThickness, door.h);
+      const barX = hinge.rectX - barPad - barThickness;
+      ctx.fillRect(barX, hinge.rectY, barThickness, door.h);
       ctx.fillStyle = 'rgba(255,224,102,0.95)';
-      ctx.fillRect(barX, door.y + door.h * (1 - hpRatio), barThickness, door.h * hpRatio);
+      ctx.fillRect(barX, hinge.rectY + door.h * (1 - hpRatio), barThickness, door.h * hpRatio);
     }
     ctx.restore();
   }

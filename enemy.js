@@ -69,6 +69,7 @@ function enemyProjectileHitRadius() { return enemyTunedUnit('enemyProjectileHitR
 function enemyProjectileSpawnOffset() { return scaleEnemyUnit(20); }
 function enemyMaxHealth() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyMaxHealth', ENEMY_MAX_HEALTH) : ENEMY_MAX_HEALTH; }
 function enemyProjectileDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyProjectileDamage', ENEMY_PROJECTILE_DAMAGE) : ENEMY_PROJECTILE_DAMAGE; }
+function enemyProjectilePenetrationPower() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyProjectilePenetrationPower', 1) : 1; }
 function enemyMeleeDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyMeleeDamage', ENEMY_MELEE_DAMAGE) : ENEMY_MELEE_DAMAGE; }
 function enemyMeleeRange() { return enemyTunedUnit('enemyMeleeRange', 18); }
 function enemyMeleeCooldownFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyMeleeCooldownFrames', ENEMY_MELEE_COOLDOWN_FRAMES) : ENEMY_MELEE_COOLDOWN_FRAMES; }
@@ -452,6 +453,7 @@ function resetEnemies() {
   enemies = INITIAL_ENEMIES.map((e, i) => ({
     ...e,
     index:              i + 1, // 1-based debug label
+    projectileTargetId: `enemy_${i + 1}`,
     state:              'patrol',
     alertTimer:         0,
     suspicionTimer:     0,
@@ -509,7 +511,18 @@ function damageEnemy(e, amount) {
   if (!e || e.health <= 0 || e.alive === false) return true;
   e.health = Math.max(0, e.health - amount);
   e.hitFlashTimer = enemyHitFlashFrames();
-  if (e.health <= 0) e.alive = false;
+  if (e.health <= 0) {
+    e.alive = false;
+    if (typeof emitSound === 'function') {
+      emitSound({
+        x: e.x,
+        y: e.y,
+        radius: typeof soundBodyFallRadius === 'function' ? soundBodyFallRadius() : scaleEnemyUnit(140),
+        sourceType: 'body-fall',
+        sourceActor: e,
+      });
+    }
+  }
   return e.health <= 0;
 }
 
@@ -520,8 +533,22 @@ function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y,
   e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY, reason };
 }
 
+function enemyAlertReasonPriority(reason) {
+  switch (reason) {
+    case 'player':        return 500;
+    case 'corpse':        return 400;
+    case 'door-impact':   return 300;
+    case 'door':          return 250;
+    case 'alerted-enemy': return 200;
+    case 'sound':         return 100;
+    default:              return 0;
+  }
+}
+
 function enterEnemyAlert(e, targetX, targetY, confirmedPlayer = false, reason = 'sound') {
   const wasAlert = e.state === 'alert';
+  const replacesAlertSource = !wasAlert ||
+    enemyAlertReasonPriority(reason) >= enemyAlertReasonPriority(e.alertReason);
   e.reactionTimer = 0;
   e.pendingReaction = null;
   e.doorInvestigation = null;
@@ -530,12 +557,15 @@ function enterEnemyAlert(e, targetX, targetY, confirmedPlayer = false, reason = 
   e.suspicionReason = null;
   e.state = 'alert';
   e.alertTimer = enemyAlertFrames();
-  e.lastKnownX = targetX;
-  e.lastKnownY = targetY;
-  e.alertReason = reason;
-  e.targetAngle = Math.atan2(targetX - e.x, -(targetY - e.y));
-  e.playerVisibleThisFrame = confirmedPlayer;
+  if (replacesAlertSource) {
+    e.lastKnownX = targetX;
+    e.lastKnownY = targetY;
+    e.alertReason = reason;
+    e.targetAngle = Math.atan2(targetX - e.x, -(targetY - e.y));
+    e.playerVisibleThisFrame = confirmedPlayer;
+  }
   if (!wasAlert) e.alertEpisode++;
+  return replacesAlertSource;
 }
 
 function scheduleMuffledDoorInvestigation(e, doorId, sourceX, sourceY) {
@@ -638,7 +668,7 @@ function enemyCanSeeDoor(e, door) {
   return samples.some(sample => enemyCanSeeWorldPoint(e, sample.x, sample.y, false));
 }
 
-function detectLocalVisualStimulus(e) {
+function detectVisibleCorpseStimulus(e) {
   if (typeof corpses !== 'undefined' && Array.isArray(corpses)) {
     for (const corpse of corpses) {
       if (corpse.type !== 'enemy' || e.observedCorpses.has(corpse)) continue;
@@ -646,6 +676,22 @@ function detectLocalVisualStimulus(e) {
       e.observedCorpses.add(corpse);
       return { type: 'corpse', x: corpse.x, y: corpse.y };
     }
+  }
+
+  return null;
+}
+
+function applyVisibleCorpseOverride(e) {
+  const corpseStimulus = detectVisibleCorpseStimulus(e);
+  if (!corpseStimulus) return false;
+  enterEnemyAlert(e, corpseStimulus.x, corpseStimulus.y, false, 'corpse');
+  return true;
+}
+
+function detectLocalVisualStimulus(e, skipCorpses = false) {
+  if (!skipCorpses) {
+    const corpseStimulus = detectVisibleCorpseStimulus(e);
+    if (corpseStimulus) return corpseStimulus;
   }
 
   if (typeof DOORS !== 'undefined' && Array.isArray(DOORS)) {
@@ -697,7 +743,8 @@ function notifyDoorDamaged(door, impactX, impactY, sourceActor = null) {
       continue;
     }
     const points = _getDoorInvestigationPoints(door, e.x, e.y);
-    enterEnemyAlert(e, points.searchX, points.searchY, false, 'door-impact');
+    const accepted = enterEnemyAlert(e, points.searchX, points.searchY, false, 'door-impact');
+    if (!accepted) continue;
     e.alertDoorTransit = {
       doorId: door.id,
       ...points,
@@ -832,15 +879,18 @@ function fireEnemyShot(e) {
   const dx = Math.sin(shotAngle);
   const dy = -Math.cos(shotAngle);
 
-  enemyProjectiles.push({
+  const projectile = createProjectile({
     x: e.x + dx * enemyProjectileSpawnOffset(),
     y: e.y + dy * enemyProjectileSpawnOffset(),
     vx: dx * e.shotSpeed,
     vy: dy * e.shotSpeed,
     angle: shotAngle,
+    damage: enemyProjectileDamage(),
+    penetrationPower: enemyProjectilePenetrationPower(),
     sourceActor: e,
     sourceType: 'enemy',
   });
+  enemyProjectiles.push(projectile);
 
   if (typeof emitSound === 'function') {
     emitSound({
@@ -848,6 +898,7 @@ function fireEnemyShot(e) {
       y: e.y,
       radius: typeof soundGunshotRadius === 'function' ? soundGunshotRadius() : scaleEnemyUnit(350),
       isGunshot: true,
+      shotId: projectile.shotId,
       sourceType: 'enemy',
       sourceActor: e,
     });
@@ -903,37 +954,19 @@ function updateAlertBehavior(e) {
 function updateEnemyProjectiles() {
   for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
     const p = enemyProjectiles[i];
-    p.x += p.vx;
-    p.y += p.vy;
-
-    const dx = p.x - player.x;
-    const dy = p.y - player.y;
-    const playerHitRadius = typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS;
-    const hitPlayer = dx * dx + dy * dy <= (playerHitRadius + enemyProjectileHitRadius()) ** 2;
+    const survives = resolveProjectileTravel(p, () => [{
+      id: 'player',
+      actor: player,
+      radius: typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS,
+      penetrationResistance: unarmoredBodyPenetrationResistance(),
+    }], () => {
+      playerHitFlashTimer = playerHitFlashFrames();
+      if (typeof damagePlayer === 'function' && damagePlayer(p.damage, { type: 'projectile' }) &&
+          typeof setGameOver === 'function') setGameOver();
+    });
     const outOfBounds = p.x < 0 || p.x > ENEMY_GAME_WIDTH || p.y < 0 || p.y > ENEMY_GAME_HEIGHT;
 
-    if (hitPlayer) {
-      playerHitFlashTimer = playerHitFlashFrames();
-      if (typeof damagePlayer === 'function' && damagePlayer(enemyProjectileDamage(), { type: 'projectile' }) &&
-          typeof setGameOver === 'function') {
-        setGameOver();
-      }
-    }
-
-    let hitDoor = false;
-    if (!hitPlayer && typeof hitDoorAt === 'function') {
-      const door = hitDoorAt(p.x, p.y);
-      if (door && typeof damageDoor === 'function') {
-        hitDoor = damageDoor(door, {
-          x: p.x,
-          y: p.y,
-          sourceActor: p.sourceActor,
-          sourceType: p.sourceType,
-        });
-      }
-    }
-
-    if (hitPlayer || hitDoor || hitsWall(p.x, p.y) || outOfBounds) {
+    if (!survives || outOfBounds) {
       enemyProjectiles.splice(i, 1);
     }
   }
@@ -1251,13 +1284,16 @@ function updateEnemies() {
       }
     }
     // 3. Local visual evidence, then delayed proximity detection.
-    else if (e.state !== 'alert' && e.reactionTimer === 0 &&
-             !e.doorInvestigation && !e.damagedDoorInvestigation) {
-      const stimulus = detectLocalVisualStimulus(e);
-      if (stimulus?.type === 'door' && stimulus.damaged) {
-        scheduleDamagedDoorInvestigation(e, stimulus.doorId);
-      } else if (stimulus) {
-        enterEnemyAlert(e, stimulus.x, stimulus.y, false, stimulus.type);
+    else {
+      const corpseHandled = applyVisibleCorpseOverride(e);
+      if (!corpseHandled && e.state !== 'alert' && e.reactionTimer === 0 &&
+          !e.doorInvestigation && !e.damagedDoorInvestigation) {
+        const stimulus = detectLocalVisualStimulus(e, true);
+        if (stimulus?.type === 'door' && stimulus.damaged) {
+          scheduleDamagedDoorInvestigation(e, stimulus.doorId);
+        } else if (stimulus) {
+          enterEnemyAlert(e, stimulus.x, stimulus.y, false, stimulus.type);
+        }
       }
     }
 
@@ -1635,12 +1671,14 @@ function drawEnemyLabels() {
     ctx.fill();
     ctx.fillStyle = '#00e5ff';
     ctx.fillText(label, lx, ly);
+    const debugState = e.state === 'alert' ? 'ALERT'
+      : (e.state === 'suspicious' ? 'SUSPICIOUS' : null);
     const debugReason = e.state === 'alert' ? e.alertReason
       : (e.state === 'suspicious' ? e.suspicionReason : null);
-    if (debugReason) {
+    if (debugState && debugReason) {
       ctx.font = `bold ${scaleEnemyUnit(8)}px monospace`;
-      ctx.fillStyle = '#ffe066';
-      ctx.fillText(debugReason, lx, ly + scaleEnemyUnit(18));
+      ctx.fillStyle = e.state === 'alert' ? '#ff8a65' : '#ffe066';
+      ctx.fillText(`${debugState}: ${debugReason}`, lx, ly + scaleEnemyUnit(18));
     }
     ctx.restore();
   }

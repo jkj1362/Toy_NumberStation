@@ -20,7 +20,7 @@ The prototype has a collapsible in-game tuning/debug panel so balance values and
 
 ## Current Tunable Groups
 
-- Sound: gunshot and footstep radius, wall/door transmission, door detour ratio, vague source distance, cue lifetimes, enemy footstep cue radius, and enemy footstep interval.
+- Sound: gunshot, projectile-impact, footstep, and body-fall radius; wall/door transmission; door detour ratio; vague source distance; cue lifetimes; enemy footstep cue radius; and enemy footstep interval.
 - Lighting: ambient, player/enemy light thresholds, lamp radius/intensity/falloff, door aperture range/intensity/falloff/spread.
 - Player: movement speeds, movement noise, stick walk threshold, health, damage, collision radius, vision cone, hard-aim vision, aim assist, glow radius, and proximity radius.
 - Enemy: state timing, reaction delays, collision/hit sizes, sight sampling, vision, movement, combat, shooting, hit flash, and search sweep values.
