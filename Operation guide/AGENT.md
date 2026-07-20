@@ -106,6 +106,7 @@ Key rules:
 - Always mark exactly one feature as the next to implement
 - Include a ⚠️ warning for any temporary test layouts or known incomplete states in the code
 - The incoming session must be able to start work immediately from the handoff alone
+- Do not include Git commit hashes, branch synchronization or worktree status, commit/push history, or instructions to commit or push. The user manages version-control checkpoints separately, and they are not session-handoff context.
 
 ---
 

@@ -10,7 +10,7 @@ Number Stations is a top-down Cold War stealth prototype. The current playable l
 
 This session completed the current-geometry core of **Feature 14 - Geometry Ballistics, Penetration, and Destruction**, plus substantial Feature 13 reaction/navigation fixes discovered during playtesting. The next feature remains **Feature 13 - Local AI Event Reactions and Body Discovery**. Its immediate next task is the projectile-impact reaction foundation and heard-impact investigation; all later Feature 13 work is ordered in section 6.
 
-Current checkpoint is `228b21c` on `main` (`Bullet ballistics work`), but the implementation and documentation described here are still uncommitted in the working tree. Inspect `git status` before editing.
+Current checkpoint is `67572fe` on `main` (`Bullet ballistics and door destruction implemented`), which contains the implementation and documentation described here. It was committed and pushed after this handoff was written; the working tree is clean at that checkpoint.
 
 ⚠ **Incomplete AI boundary:** projectile collisions already create neutral impact records and player-facing sounds, but those sounds deliberately use `canAlertEnemies: false`. General heard/witnessed impact reactions are not live yet.
 
