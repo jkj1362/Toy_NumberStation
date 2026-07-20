@@ -20,6 +20,7 @@ let staticLightSourceCtx = staticLightSourceCanvas.getContext('2d');
 let staticLightDirty = true;
 let staticLightImageData = null;
 let currentMissionLighting = null;
+let lightingExternalLightAvailable = true;
 
 function lightingTunedUnit(key, fallback) {
   return scaleGameUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
@@ -85,6 +86,7 @@ function scaleLightingAperture(aperture) {
 
 function initLighting(missionLighting) {
   currentMissionLighting = missionLighting;
+  lightingExternalLightAvailable = missionLighting.externalLightAvailable !== false;
   lightingGlobalAmbient = tunedGlobalAmbient(missionLighting.globalAmbient ?? LIGHT_GLOBAL_AMBIENT);
   lightingZones = (missionLighting.zones ?? []).map(zone => ({
     ...scaleLightingRect(zone),
@@ -107,6 +109,7 @@ function initLighting(missionLighting) {
 }
 
 function resetLighting() {
+  lightingExternalLightAvailable = currentMissionLighting?.externalLightAvailable !== false;
   for (const lamp of lightingLamps) {
     lamp.active = lamp.defaultActive;
   }
@@ -157,6 +160,23 @@ function setLightingAperturesOpen(ids, open) {
     changed = true;
   }
   if (changed) markStaticLightingDirty();
+}
+
+function setExternalLightAvailable(available) {
+  const next = available === true;
+  if (lightingExternalLightAvailable === next) return;
+  lightingExternalLightAvailable = next;
+  markStaticLightingDirty();
+}
+
+function setExternalWeatherState(weather = {}) {
+  const raining = weather.raining === true || weather.isRaining === true;
+  const moonlight = Number(weather.moonlightIntensity ?? (weather.brightMoon === true ? 1 : 0));
+  setExternalLightAvailable(!raining && moonlight > 0);
+}
+
+function apertureHasLight(aperture) {
+  return aperture.open && (!aperture.requiresExternalLight || lightingExternalLightAvailable);
 }
 
 function rebuildLightingVisibilityPolygons() {
@@ -304,7 +324,7 @@ function getLampContribution(lamp, wx, wy) {
 }
 
 function getApertureContribution(aperture, wx, wy) {
-  if (!aperture.open) return 0;
+  if (!apertureHasLight(aperture)) return 0;
   if (!aperture.visibilityPolygon || !pointInPolygon(aperture.visibilityPolygon, wx, wy)) return 0;
 
   const dir = getDirectionVector(aperture.direction);
@@ -470,7 +490,7 @@ function drawLampLight(lamp) {
 }
 
 function drawApertureLight(aperture) {
-  if (!aperture.open || !aperture.visibilityPolygon || aperture.visibilityPolygon.length < 3) return;
+  if (!apertureHasLight(aperture) || !aperture.visibilityPolygon || aperture.visibilityPolygon.length < 3) return;
 
   const dir = getDirectionVector(aperture.direction);
 
@@ -599,7 +619,7 @@ function renderStaticLampLight(lamp) {
 }
 
 function renderStaticApertureLight(aperture) {
-  if (!aperture.open || !aperture.visibilityPolygon || aperture.visibilityPolygon.length < 3) return;
+  if (!apertureHasLight(aperture) || !aperture.visibilityPolygon || aperture.visibilityPolygon.length < 3) return;
 
   renderStaticSource((sourceCtx) => {
     const dir = getDirectionVector(aperture.direction);

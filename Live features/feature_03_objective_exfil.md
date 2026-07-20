@@ -2,7 +2,7 @@
 
 **Live status: Implemented.**
 
-The mission loop is: infiltrate, find the pickup, collect it, activate exfil, and leave alive.
+The mission loop is: infiltrate, find the pickup, collect it, activate an exit, and leave alive.
 
 ## Current Behavior
 
@@ -11,7 +11,10 @@ The mission loop is: infiltrate, find the pickup, collect it, activate exfil, an
 - If the pickup is not directly visible, a hint marker is still drawn at its location.
 - Pressing `E` or gamepad face-left / button `2` interacts with the pickup when close enough.
 - After pickup, the game enters `exfil` phase and activates the primary bottom exfil point.
-- Side wall gap exits can be discovered/activated when visible, lit, and interacted with.
+- The two secondary side exits are linked to physical windows.
+- Interacting with an intact linked window at close range silently opens it, removes its blocker, and activates that exit.
+- Shooting a linked window until it breaks automatically activates the exit and skips the manual interaction step.
+- Each secondary exit activates only once even if the window later receives another interaction or damage event.
 - Reaching an active exfil point completes the mission and resets after a short delay.
 
 ## Current Caveats
@@ -24,3 +27,4 @@ The mission loop is: infiltrate, find the pickup, collect it, activate exfil, an
 
 - `input.js`
 - `game.js`
+- `lighting.js`

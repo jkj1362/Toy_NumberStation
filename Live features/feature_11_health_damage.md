@@ -9,6 +9,7 @@ Player and enemies now use explicit HP, combat damage, death state, corpses, and
 - The player starts each reset with `100` HP.
 - Living enemies start with `100` HP.
 - Player projectiles deal `100` enemy damage, so an unarmored standard enemy dies from one player shot.
+- Standard bullets also carry `1.0` penetration power against `1.0` unarmored body resistance, so the damaging shot stops in the first person unless power is raised through the current tuning hook.
 - Enemy projectiles deal `50` player damage.
 - Melee enemies deal `25` player damage when they reach the player, with a short attack cooldown.
 - Player damage triggers the red hit flash.
@@ -25,7 +26,7 @@ Player and enemies now use explicit HP, combat damage, death state, corpses, and
 - Corpse interaction exists only as data/overlap support; loot behavior is not implemented yet.
 - There is no armor, critical hit, stagger, bleed, healing, revive, body hiding, or campaign consequence.
 - Game over is a local reset flow, not a metagame consequence.
-- Damage values are hardcoded and should eventually move into the gameplay tuner.
+- Health, projectile damage, melee damage/cooldown, hit feedback, and projectile penetration values are exposed through the runtime gameplay tuner but do not persist across reloads.
 - Armor is intentionally deferred and should become a separate feature doc later.
 
 ## Related Files

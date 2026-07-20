@@ -66,30 +66,35 @@ const DOOR_SPECS = [
     id: 'corridor_left_door',
     x: 220, y: 446, w: 100, h: 6,
     orientation: 'horizontal',
+    material: 'wood',
     apertureIds: ['corridor_left_door_n', 'corridor_left_door_s'],
   },
   {
     id: 'corridor_right_door',
     x: 778, y: 446, w: 82, h: 6,
     orientation: 'horizontal',
+    material: 'wood',
     apertureIds: ['corridor_right_door_n', 'corridor_right_door_s'],
   },
   {
     id: 'room_a_east_door',
     x: 406, y: 250, w: 6, h: 90,
     orientation: 'vertical',
+    material: 'wood',
     apertureIds: ['room_a_east_door_e', 'room_a_east_door_w'],
   },
   {
     id: 'room_bc_divider_door',
     x: 766, y: 160, w: 6, h: 100,
     orientation: 'vertical',
+    material: 'wood',
     apertureIds: ['room_bc_divider_door_e', 'room_bc_divider_door_w'],
   },
   {
     id: 'room_f_west_door',
-    x: 906, y: 540, w: 6, h: 100,
+    x: 900, y: 540, w: 18, h: 100,
     orientation: 'vertical',
+    material: 'metal',
     apertureIds: ['room_f_west_door_e', 'room_f_west_door_w'],
   },
 ];
@@ -98,19 +103,57 @@ const DOORS = DOOR_SPECS.map((door) => ({
   ...scaleGameRect(door),
   id: door.id,
   orientation: door.orientation,
+  material: door.material,
+  geometryId: door.id,
+  geometryType: 'door',
   state: 'closed',
   defaultState: 'closed',
   openedBy: null,
-  destructible: true,
-  projectileBehavior: 'penetrate',
-  penetrationResistance: doorProjectileResistance(),
+  closingActor: null,
+  closingSide: 0,
+  destructible: door.material !== 'metal',
+  projectileBehavior: door.material === 'metal' ? 'block' : 'penetrate',
+  penetrationResistance: door.material === 'metal' ? Infinity : doorProjectileResistance(),
   bulletHoles: [],
   swingProgress: 0,
   swingDirection: 1,
-  hp: doorMaxHp(),
-  maxHp: doorMaxHp(),
+  hp: door.material === 'metal' ? null : doorMaxHp(),
+  maxHp: door.material === 'metal' ? null : doorMaxHp(),
   soundTransmission: doorSoundTransmission(),
   apertureIds: door.apertureIds,
+}));
+
+const WINDOW_SPECS = [
+  {
+    id: 'room_a_west_window',
+    x: 7.5, y: 160, w: 3, h: 60,
+    orientation: 'vertical',
+    apertureIds: ['room_a_west_window_moonlight'],
+  },
+  {
+    id: 'room_bc_east_window',
+    x: 1089.5, y: 160, w: 3, h: 60,
+    orientation: 'vertical',
+    apertureIds: ['room_bc_east_window_moonlight'],
+  },
+];
+
+const WINDOWS = WINDOW_SPECS.map((windowSpec) => ({
+  ...scaleGameRect(windowSpec),
+  id: windowSpec.id,
+  orientation: windowSpec.orientation,
+  apertureIds: windowSpec.apertureIds,
+  material: 'glass',
+  geometryId: windowSpec.id,
+  geometryType: 'window',
+  state: 'intact',
+  defaultState: 'intact',
+  destructible: true,
+  projectileBehavior: 'penetrate',
+  penetrationResistance: windowProjectileResistance(),
+  bulletHoles: [],
+  hp: windowMaxHp(),
+  maxHp: windowMaxHp(),
 }));
 
 const projectiles = [];
@@ -176,6 +219,7 @@ const ROOM_LAMP_LIGHT = {
 
 const MISSION_LIGHTING = {
   globalAmbient: 0.0,
+  externalLightAvailable: true,
   zones: [
     { id: 'lobby_lamp_spill', x: 320, y: 458, w: 380, h: 170, ambient: 0.10 },
     { id: 'entry_dim_spill', x: 430, y: 640, w: 140, h: 92, ambient: 0.08 },
@@ -197,8 +241,8 @@ const MISSION_LIGHTING = {
     { x:1082, y: 590, wallSide: 'E', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
   ],
   apertures: [
-    { id: 'room_a_west_window_moonlight', kind: 'window', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
-    { id: 'room_bc_east_window_moonlight', kind: 'window', x: 1082, y: 190, direction: 'W', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true },
+    { id: 'room_a_west_window_moonlight', kind: 'window', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true, requiresExternalLight: true },
+    { id: 'room_bc_east_window_moonlight', kind: 'window', x: 1082, y: 190, direction: 'W', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true, requiresExternalLight: true },
     { id: 'corridor_left_door_n', kind: 'door', x: 270, y: 440, direction: 'N', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
     { id: 'corridor_left_door_s', kind: 'door', x: 270, y: 458, direction: 'S', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
     { id: 'corridor_right_door_n', kind: 'door', x: 819, y: 440, direction: 'N', width: 82, ...DOOR_LIGHT_APERTURE, open: false },
@@ -217,8 +261,8 @@ const MISSION_LIGHTING = {
 
 // Wall duct/window exits - manually activated bonus exfil points
 const WALL_GAP_EXITS = [
-  { x:    9, y: 190, roomId: 'room_a',  activated: false }, // left perimeter duct, Room A
-  { x: 1091, y: 190, roomId: 'room_bc', activated: false }, // right perimeter duct, Room B/C
+  { x:    9, y: 190, roomId: 'room_a',  windowId: 'room_a_west_window',  activated: false },
+  { x: 1091, y: 190, roomId: 'room_bc', windowId: 'room_bc_east_window', activated: false },
 ].map(scaleGamePoint);
 let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
@@ -233,11 +277,16 @@ function gameTunedUnit(key, fallback) {
   return scaleGameUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
 }
 
-function doorMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorMaxHp', 60) : 60; }
+function doorMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorMaxHp', 200) : 200; }
 function doorSoundTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundClosedDoorTransmission', 0.8) : 0.8; }
 function doorDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorDamage', DOOR_DAMAGE) : DOOR_DAMAGE; }
 function doorProjectileResistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorProjectileResistance', 0.5) : 0.5; }
+function windowMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('windowMaxHp', 60) : 60; }
+function windowDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('windowDamage', 20) : 20; }
+function windowProjectileResistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('windowProjectileResistance', 0.15) : 0.15; }
 function doorSwingFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorSwingFrames', 12) : 12; }
+function metalDoorSwingFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('metalDoorSwingFrames', 24) : 24; }
+function doorSwingFramesFor(door) { return door.material === 'metal' ? metalDoorSwingFrames() : doorSwingFrames(); }
 function unarmoredBodyPenetrationResistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('unarmoredBodyPenetrationResistance', 1) : 1; }
 function doorInteractRadius() { return gameTunedUnit('doorInteractRadius', 45); }
 function doorOpenAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('doorOpenAngleDegrees', 75) : DOOR_OPEN_ANGLE; }
@@ -259,10 +308,28 @@ function showSecondaryExfilDebug() { return typeof isDebugOverlayEnabled === 'fu
 function applyDoorTuning(preserveHealthRatio = true) {
   const maxHp = doorMaxHp();
   for (const door of DOORS) {
+    if (!door.destructible) {
+      door.hp = null;
+      door.maxHp = null;
+      door.penetrationResistance = Infinity;
+      door.soundTransmission = doorSoundTransmission();
+      continue;
+    }
     const ratio = door.maxHp > 0 ? door.hp / door.maxHp : 1;
     door.maxHp = maxHp;
+    door.penetrationResistance = doorProjectileResistance();
     door.soundTransmission = doorSoundTransmission();
     door.hp = preserveHealthRatio ? Math.max(0, Math.min(maxHp, ratio * maxHp)) : maxHp;
+  }
+}
+
+function applyWindowTuning(preserveHealthRatio = true) {
+  const maxHp = windowMaxHp();
+  for (const windowGeometry of WINDOWS) {
+    const ratio = windowGeometry.maxHp > 0 ? windowGeometry.hp / windowGeometry.maxHp : 1;
+    windowGeometry.maxHp = maxHp;
+    windowGeometry.penetrationResistance = windowProjectileResistance();
+    windowGeometry.hp = preserveHealthRatio ? Math.max(0, Math.min(maxHp, ratio * maxHp)) : maxHp;
   }
 }
 
@@ -270,12 +337,22 @@ function getClosedDoorRects() {
   return DOORS.filter(door => door.state === 'closed');
 }
 
+function getIntactWindowRects() {
+  return WINDOWS.filter(windowGeometry => windowGeometry.state === 'intact');
+}
+
 function getMovementBlockers() {
-  return WALLS.concat(getClosedDoorRects());
+  return WALLS.concat(getClosedDoorRects(), getIntactWindowRects());
+}
+
+function getMovementBlockerPolygons() {
+  return DOORS
+    .filter(door => door.state !== 'closed' && door.state !== 'destroyed')
+    .map(getDoorPanelCorners);
 }
 
 function getRayBlockerRects() {
-  return getMovementBlockers();
+  return WALLS.concat(getClosedDoorRects());
 }
 
 function rotateDoorPoint(x, y, angle) {
@@ -318,6 +395,16 @@ function getDoorLocalPoint(door, x, y) {
   return rotateDoorPoint(x - hinge.x, y - hinge.y, -getDoorSwingAngle(door));
 }
 
+function pointHitsDoorPanel(door, x, y, radius = 0) {
+  if (door.state === 'closed' || door.state === 'destroyed') return false;
+  const hinge = getDoorHinge(door);
+  const local = getDoorLocalPoint(door, x, y);
+  return local.x > hinge.rectX - radius &&
+    local.x < hinge.rectX + door.w + radius &&
+    local.y > hinge.rectY - radius &&
+    local.y < hinge.rectY + door.h + radius;
+}
+
 function getDoorOpeningDirection(door, opener) {
   if (!opener) return door.swingDirection;
 
@@ -326,10 +413,34 @@ function getDoorOpeningDirection(door, opener) {
     : (opener.x >= door.x + door.w / 2 ? 1 : -1);
 }
 
+function getDoorEntitySide(door, entity) {
+  if (!entity) return 0;
+  return door.orientation === 'horizontal'
+    ? (entity.y >= door.y + door.h / 2 ? 1 : -1)
+    : (entity.x >= door.x + door.w / 2 ? 1 : -1);
+}
+
+function keepClosingActorOnOriginalSide(door) {
+  const entity = door.closingActor;
+  const side = door.closingSide;
+  if (!entity || !side || entity.alive === false) return;
+  const radius = entity === player
+    ? (typeof playerRadius === 'function' ? playerRadius() : PLAYER_RADIUS)
+    : (typeof enemyRadius === 'function' ? enemyRadius() : scaleGameUnit(16));
+  const normalRange = doorInteractRadius();
+  if (door.orientation === 'horizontal') {
+    if (entity.x < door.x - radius || entity.x > door.x + door.w + radius ||
+        Math.abs(entity.y - (door.y + door.h / 2)) > normalRange) return;
+    entity.y = side > 0 ? door.y + door.h + radius : door.y - radius;
+  } else {
+    if (entity.y < door.y - radius || entity.y > door.y + door.h + radius ||
+        Math.abs(entity.x - (door.x + door.w / 2)) > normalRange) return;
+    entity.x = side > 0 ? door.x + door.w + radius : door.x - radius;
+  }
+}
+
 function getRayBlockerPolygons() {
-  return DOORS
-    .filter(door => door.state === 'open')
-    .map(getDoorPanelCorners);
+  return getMovementBlockerPolygons();
 }
 
 // Precomputed wall segments and corners for visibility raycasting (static — walls never move)
@@ -434,18 +545,33 @@ let gamePhase       = 'infiltrate'; // 'infiltrate' | 'exfil' | 'complete' | 'ga
 let hasMapKnowledge = true;         // true = player acquired facility map during day phase
 
 function setDoorApertures(door) {
-  const open = door.state === 'open' || door.state === 'destroyed';
+  const open = door.state === 'open' || door.state === 'closing' || door.state === 'destroyed';
   if (typeof setLightingAperturesOpen === 'function') {
     setLightingAperturesOpen(door.apertureIds, open);
   }
 }
 
 function setDoorState(door, state, openedBy = null) {
-  if (door.state === state) return;
-  if (state === 'open') door.swingDirection = getDoorOpeningDirection(door, openedBy);
-  door.state = state;
-  door.openedBy = state === 'open' ? openedBy : null;
-  if (state === 'destroyed') door.swingProgress = 0;
+  if (!door || door.state === 'destroyed' || door.state === state ||
+      (state === 'closed' && door.state === 'closing')) return;
+  if (state === 'open') {
+    door.swingDirection = getDoorOpeningDirection(door, openedBy);
+    door.state = 'open';
+    door.openedBy = openedBy;
+    door.closingActor = null;
+    door.closingSide = 0;
+  } else if (state === 'closed') {
+    const closingActor = openedBy ?? door.openedBy ?? null;
+    door.state = 'closing';
+    door.closingActor = closingActor;
+    door.closingSide = getDoorEntitySide(door, closingActor);
+  } else if (state === 'destroyed') {
+    door.state = 'destroyed';
+    door.openedBy = null;
+    door.closingActor = null;
+    door.closingSide = 0;
+    door.swingProgress = 0;
+  }
   setDoorApertures(door);
   markGeometryDirty();
   markDoorLightingDirty();
@@ -456,6 +582,8 @@ function resetDoors() {
   for (const door of DOORS) {
     door.state = door.defaultState;
     door.openedBy = null;
+    door.closingActor = null;
+    door.closingSide = 0;
     door.hp = door.maxHp;
     door.bulletHoles.length = 0;
     door.swingProgress = 0;
@@ -464,6 +592,48 @@ function resetDoors() {
   }
   markGeometryDirty();
   markDoorLightingDirty();
+}
+
+function resetWindows() {
+  applyWindowTuning(false);
+  for (const windowGeometry of WINDOWS) {
+    windowGeometry.state = windowGeometry.defaultState;
+    windowGeometry.hp = windowGeometry.maxHp;
+    windowGeometry.bulletHoles.length = 0;
+  }
+  markGeometryDirty();
+}
+
+function activateWindowExit(windowGeometry) {
+  const gap = gapExits.find(candidate => candidate.windowId === windowGeometry.id);
+  if (!gap || gap.activated) return false;
+  gap.activated = true;
+  exfilPoints.push({
+    x: gap.x,
+    y: gap.y,
+    type: 'gap',
+    windowId: windowGeometry.id,
+    active: gamePhase === 'exfil',
+    discovered: true,
+  });
+  return true;
+}
+
+function openNearbyWindow(entity = player, radius = interactRadius()) {
+  let nearest = null;
+  let nearestDistance = radius * radius;
+  for (const windowGeometry of WINDOWS) {
+    if (windowGeometry.state !== 'intact') continue;
+    const distance = distanceSqToRect(windowGeometry, entity.x, entity.y);
+    if (distance > nearestDistance) continue;
+    nearest = windowGeometry;
+    nearestDistance = distance;
+  }
+  if (!nearest) return false;
+  nearest.state = 'open';
+  markGeometryDirty();
+  activateWindowExit(nearest);
+  return true;
 }
 
 function closestPointOnRect(rect, x, y) {
@@ -520,11 +690,21 @@ function updateDoorAnimations() {
   let changed = false;
   for (const door of DOORS) {
     const target = door.state === 'open' ? 1 : 0;
-    const next = Math.abs(door.swingProgress - target) <= 1 / doorSwingFrames()
+    const frames = doorSwingFramesFor(door);
+    let next = Math.abs(door.swingProgress - target) <= 1 / frames
       ? target
-      : door.swingProgress + Math.sign(target - door.swingProgress) / doorSwingFrames();
+      : door.swingProgress + Math.sign(target - door.swingProgress) / frames;
+    if (Math.abs(next - target) < 0.000001) next = target;
     if (next === door.swingProgress) continue;
     door.swingProgress = next;
+    if (door.state === 'closing' && next === 0) {
+      keepClosingActorOnOriginalSide(door);
+      door.state = 'closed';
+      door.openedBy = null;
+      door.closingActor = null;
+      door.closingSide = 0;
+      setDoorApertures(door);
+    }
     changed = true;
   }
   if (changed) {
@@ -605,9 +785,10 @@ function getNearbyDoor(entity, radius = doorInteractRadius()) {
 function toggleNearbyDoor(entity = player) {
   const door = getNearbyDoor(entity);
   if (!door) return false;
+  if (door.state === 'closing') return true;
   if (isDoorBlockedByEnemy(door)) return true;
   const nextState = door.state === 'closed' ? 'open' : 'closed';
-  setDoorState(door, nextState, nextState === 'open' ? entity : null);
+  setDoorState(door, nextState, entity);
   if (typeof emitSound === 'function') {
     emitSound({
       x: entity.x,
@@ -650,7 +831,7 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
     impact = amount;
     amount = doorDamage();
   }
-  if (!door || door.state === 'destroyed') return false;
+  if (!door || !door.destructible || door.state === 'destroyed') return false;
   if (impact && typeof impact.x === 'number' && typeof impact.y === 'number') {
     door.bulletHoles.push(getDoorLocalPoint(door, impact.x, impact.y));
     if (door.bulletHoles.length > 24) door.bulletHoles.shift();
@@ -663,7 +844,7 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
       emitSound({
         x: door.x + door.w / 2,
         y: door.y + door.h / 2,
-        radius: scaleGameUnit(240),
+        radius: typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(240),
         sourceType: 'door',
         sourceActor: door,
         shotId: impact?.shotId,
@@ -680,6 +861,36 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
       typeof impact.y === 'number' ? impact.y : door.y + door.h / 2,
       impact.sourceActor ?? null
     );
+  }
+  return true;
+}
+
+function damageWindow(windowGeometry, amount = windowDamage(), impact = null) {
+  if (!windowGeometry || windowGeometry.state === 'destroyed') return false;
+  if (impact && typeof impact.x === 'number' && typeof impact.y === 'number') {
+    windowGeometry.bulletHoles.push({
+      x: impact.x - windowGeometry.x,
+      y: impact.y - windowGeometry.y,
+    });
+    if (windowGeometry.bulletHoles.length > 12) windowGeometry.bulletHoles.shift();
+  }
+  windowGeometry.hp -= amount;
+  if (windowGeometry.hp <= 0) {
+    windowGeometry.hp = 0;
+    windowGeometry.state = 'destroyed';
+    markGeometryDirty();
+    activateWindowExit(windowGeometry);
+    if (typeof emitSound === 'function') {
+      emitSound({
+        x: windowGeometry.x + windowGeometry.w / 2,
+        y: windowGeometry.y + windowGeometry.h / 2,
+        radius: typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(240),
+        sourceType: 'window',
+        sourceActor: windowGeometry,
+        shotId: impact?.shotId,
+        canAlertEnemies: impact?.shotId ? false : undefined,
+      });
+    }
   }
   return true;
 }
@@ -745,6 +956,32 @@ function pushOutOfWalls(entity, radius) {
         entity.y += dTop  < dBottom ? -dTop  : dBottom;
       }
     }
+  }
+
+  for (const door of DOORS) {
+    if (!pointHitsDoorPanel(door, entity.x, entity.y, radius)) continue;
+    const hinge = getDoorHinge(door);
+    const local = getDoorLocalPoint(door, entity.x, entity.y);
+    const left = hinge.rectX - radius;
+    const right = hinge.rectX + door.w + radius;
+    const top = hinge.rectY - radius;
+    const bottom = hinge.rectY + door.h + radius;
+    const dLeft = local.x - left;
+    const dRight = right - local.x;
+    const dTop = local.y - top;
+    const dBottom = bottom - local.y;
+    const minX = Math.min(dLeft, dRight);
+    const minY = Math.min(dTop, dBottom);
+    const separationEpsilon = 0.01;
+    if (minX < minY) {
+      local.x = dLeft < dRight ? left - separationEpsilon : right + separationEpsilon;
+    } else {
+      local.y = dTop < dBottom ? top - separationEpsilon : bottom + separationEpsilon;
+    }
+
+    const rotated = rotateDoorPoint(local.x, local.y, getDoorSwingAngle(door));
+    entity.x = hinge.x + rotated.x;
+    entity.y = hinge.y + rotated.y;
   }
 }
 
@@ -853,6 +1090,11 @@ function getProjectileCollision(projectile, x1, y1, x2, y2, actorTargets) {
     const hit = segmentPolygonIntersection(x1, y1, x2, y2, getDoorPanelCorners(door));
     if (hit) candidates.push({ ...hit, kind: 'geometry', target: door });
   }
+  for (const windowGeometry of WINDOWS) {
+    if (windowGeometry.state !== 'intact' || projectile.hitTargetIds.has(windowGeometry.id)) continue;
+    const hit = segmentRectIntersection(x1, y1, x2, y2, windowGeometry);
+    if (hit) candidates.push({ ...hit, kind: 'geometry', target: windowGeometry });
+  }
 
   const collisionPriority = { actor: 0, lamp: 1, geometry: 2 };
   candidates.sort((a, b) => {
@@ -874,6 +1116,7 @@ function emitProjectileImpact(projectile, target, x, y) {
     sourceType: projectile.sourceType,
     geometryId: target.id ?? target.geometryId,
     geometryType: target.geometryType,
+    material: target.material,
     destructible: target.destructible === true,
     projectileBehavior: target.projectileBehavior,
     destroyed: target.state === 'destroyed',
@@ -882,10 +1125,15 @@ function emitProjectileImpact(projectile, target, x, y) {
   if (projectileImpactEvents.length > 128) projectileImpactEvents.shift();
 
   if (typeof emitSound === 'function') {
+    const radius = target.geometryType === 'window'
+      ? (typeof soundWindowImpactRadius === 'function' ? soundWindowImpactRadius() : scaleGameUnit(90))
+      : (target.geometryType === 'door' && target.material === 'metal'
+        ? (typeof soundMetalDoorImpactRadius === 'function' ? soundMetalDoorImpactRadius() : scaleGameUnit(260))
+        : (typeof soundProjectileImpactRadius === 'function' ? soundProjectileImpactRadius() : scaleGameUnit(220)));
     emitSound({
       x,
       y,
-      radius: typeof soundProjectileImpactRadius === 'function' ? soundProjectileImpactRadius() : scaleGameUnit(220),
+      radius,
       sourceType: projectile.sourceType,
       sourceActor: projectile.sourceActor,
       shotId: projectile.shotId,
@@ -917,7 +1165,10 @@ function resolveProjectileTravel(projectile, getActorTargets, onActorHit) {
       projectile.penetrationPower -= hit.target.penetrationResistance;
     } else if (hit.kind === 'lamp') {
       projectile.hitTargetIds.add(hit.target.id);
-      if (typeof destroyLamp === 'function') destroyLamp(hit.target.lamp);
+      const destroyed = typeof destroyLamp === 'function' && destroyLamp(hit.target.lamp);
+      if (destroyed && typeof notifyLampDestroyed === 'function') {
+        notifyLampDestroyed(hit.target.lamp, hitX, hitY, projectile.sourceActor);
+      }
       emitProjectileImpact(projectile, hit.target, hitX, hitY);
       projectile.x = hitX;
       projectile.y = hitY;
@@ -926,14 +1177,19 @@ function resolveProjectileTravel(projectile, getActorTargets, onActorHit) {
       const target = hit.target;
       projectile.hitTargetIds.add(target.id ?? target.geometryId);
       let destroyed = false;
-      if (target.destructible && typeof damageDoor === 'function') {
-        damageDoor(target, doorDamage(), {
+      if (target.destructible) {
+        const impact = {
           x: hitX,
           y: hitY,
           sourceActor: projectile.sourceActor,
           sourceType: projectile.sourceType,
           shotId: projectile.shotId,
-        });
+        };
+        if (target.geometryType === 'door' && typeof damageDoor === 'function') {
+          damageDoor(target, doorDamage(), impact);
+        } else if (target.geometryType === 'window' && typeof damageWindow === 'function') {
+          damageWindow(target, windowDamage(), impact);
+        }
         destroyed = target.state === 'destroyed';
       }
       emitProjectileImpact(projectile, target, hitX, hitY);
@@ -943,9 +1199,7 @@ function resolveProjectileTravel(projectile, getActorTargets, onActorHit) {
         projectile.y = hitY;
         return false;
       }
-      projectile.penetrationPower -= target.geometryType === 'door'
-        ? doorProjectileResistance()
-        : target.penetrationResistance;
+      projectile.penetrationPower -= target.penetrationResistance;
     }
 
     if (projectile.penetrationPower <= 0) {
@@ -1017,6 +1271,7 @@ function reset() {
   resetEnemies();
   resetLighting();
   resetDoors();
+  resetWindows();
   gamePhase = 'infiltrate';
   gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
   initPickup();
@@ -1102,13 +1357,14 @@ function update() {
 
   const interactPressed = input.interactPressed;
   const doorInteractionHandled = interactPressed && toggleNearbyDoor(player);
+  const windowInteractionHandled = interactPressed && !doorInteractionHandled && openNearbyWindow(player);
 
   if (gamePhase === 'infiltrate' && !pickup.collected) {
     pickup.visibleToPlayer = inVisionCone(pickup.x, pickup.y) && isLit(pickup.x, pickup.y);
     for (const ef of exfilPoints) {
       if (!ef.discovered && inVisionCone(ef.x, ef.y) && isLit(ef.x, ef.y)) ef.discovered = true;
     }
-    if (interactPressed && !doorInteractionHandled) {
+    if (interactPressed && !doorInteractionHandled && !windowInteractionHandled) {
       const dx = player.x - pickup.x, dy = player.y - pickup.y;
       if (dx * dx + dy * dy <= interactRadius() * interactRadius()) {
         pickup.collected = true;
@@ -1121,9 +1377,12 @@ function update() {
   // Gap exit activation — any phase, must be visible and in range
   for (const gap of gapExits) {
     if (gap.activated) continue;
+    const linkedWindow = gap.windowId ? WINDOWS.find(windowGeometry => windowGeometry.id === gap.windowId) : null;
+    if (linkedWindow && linkedWindow.state !== 'destroyed') continue;
     if (!inVisionCone(gap.x, gap.y) || !isLit(gap.x, gap.y)) continue;
     const gdx = player.x - gap.x, gdy = player.y - gap.y;
-    if (interactPressed && !doorInteractionHandled && gdx * gdx + gdy * gdy <= interactRadius() * interactRadius()) {
+    if (interactPressed && !doorInteractionHandled && !windowInteractionHandled &&
+        gdx * gdx + gdy * gdy <= interactRadius() * interactRadius()) {
       gap.activated = true;
       exfilPoints.push({ x: gap.x, y: gap.y, type: 'gap', active: gamePhase === 'exfil', discovered: true });
     }
@@ -1177,6 +1436,41 @@ function drawWalls() {
   }
 }
 
+function drawWindows() {
+  for (const windowGeometry of WINDOWS) {
+    if (windowGeometry.state === 'open') continue;
+    if (windowGeometry.state === 'destroyed') {
+      ctx.fillStyle = 'rgba(155,220,235,0.62)';
+      const shardSize = scaleGameUnit(3);
+      for (let i = 0; i < 6; i++) {
+        const t = (i + 0.5) / 6;
+        const x = windowGeometry.x + windowGeometry.w / 2 + (i % 2 ? shardSize : -shardSize);
+        const y = windowGeometry.y + windowGeometry.h * t;
+        ctx.fillRect(x - shardSize / 2, y - shardSize / 2, shardSize, shardSize);
+      }
+      continue;
+    }
+
+    ctx.fillStyle = 'rgba(126,205,225,0.42)';
+    ctx.fillRect(windowGeometry.x, windowGeometry.y, windowGeometry.w, windowGeometry.h);
+    ctx.strokeStyle = 'rgba(185,235,245,0.9)';
+    ctx.lineWidth = scaleGameUnit(1);
+    ctx.strokeRect(windowGeometry.x, windowGeometry.y, windowGeometry.w, windowGeometry.h);
+    ctx.strokeStyle = 'rgba(30,55,62,0.95)';
+    for (const hole of windowGeometry.bulletHoles) {
+      const x = windowGeometry.x + hole.x;
+      const y = windowGeometry.y + hole.y;
+      const crack = scaleGameUnit(4);
+      ctx.beginPath();
+      ctx.moveTo(x - crack, y);
+      ctx.lineTo(x + crack, y);
+      ctx.moveTo(x, y - crack);
+      ctx.lineTo(x, y + crack);
+      ctx.stroke();
+    }
+  }
+}
+
 function drawDoors() {
   for (const door of DOORS) {
     ctx.save();
@@ -1184,9 +1478,9 @@ function drawDoors() {
       const hinge = getDoorHinge(door);
       ctx.translate(hinge.x, hinge.y);
       ctx.rotate(getDoorSwingAngle(door));
-      ctx.fillStyle = '#2b2220';
+      ctx.fillStyle = door.material === 'metal' ? '#343b42' : '#2b2220';
       ctx.fillRect(hinge.rectX, hinge.rectY, door.w, door.h);
-      ctx.strokeStyle = '#8a6a42';
+      ctx.strokeStyle = door.material === 'metal' ? '#87939e' : '#8a6a42';
       ctx.lineWidth = scaleGameUnit(2);
       ctx.strokeRect(hinge.rectX, hinge.rectY, door.w, door.h);
       ctx.fillStyle = '#090706';
@@ -1239,7 +1533,7 @@ function drawCorpses() {
 function drawDoorHealthBars() {
   if (!showDoorHpBars()) return;
   for (const door of DOORS) {
-    if (door.state === 'destroyed' || !isDoorVisibleToPlayer(door)) continue;
+    if (!door.destructible || door.state === 'destroyed' || !isDoorVisibleToPlayer(door)) continue;
     const hpRatio = door.hp / door.maxHp;
     const barPad = scaleGameUnit(4);
     const barThickness = scaleGameUnit(4);
@@ -1261,6 +1555,34 @@ function drawDoorHealthBars() {
       ctx.fillRect(barX, hinge.rectY + door.h * (1 - hpRatio), barThickness, door.h * hpRatio);
     }
     ctx.restore();
+  }
+}
+
+function drawWindowHealthBars() {
+  if (!showDoorHpBars()) return;
+  for (const windowGeometry of WINDOWS) {
+    if (windowGeometry.state !== 'intact') continue;
+    const samples = [
+      { x: windowGeometry.x + windowGeometry.w / 2, y: windowGeometry.y + windowGeometry.h / 2 },
+      { x: windowGeometry.x + windowGeometry.w / 2, y: windowGeometry.y },
+      { x: windowGeometry.x + windowGeometry.w / 2, y: windowGeometry.y + windowGeometry.h },
+    ];
+    if (!samples.some(sample => playerHasClearView(sample.x, sample.y))) continue;
+    const hpRatio = windowGeometry.hp / windowGeometry.maxHp;
+    const barThickness = scaleGameUnit(4);
+    const barPad = scaleGameUnit(4);
+    ctx.fillStyle = 'rgba(14,24,28,0.88)';
+    if (windowGeometry.orientation === 'vertical') {
+      const barX = windowGeometry.x - barPad - barThickness;
+      ctx.fillRect(barX, windowGeometry.y, barThickness, windowGeometry.h);
+      ctx.fillStyle = 'rgba(126,220,235,0.95)';
+      ctx.fillRect(barX, windowGeometry.y + windowGeometry.h * (1 - hpRatio), barThickness, windowGeometry.h * hpRatio);
+    } else {
+      const barY = windowGeometry.y - barPad - barThickness;
+      ctx.fillRect(windowGeometry.x, barY, windowGeometry.w, barThickness);
+      ctx.fillStyle = 'rgba(126,220,235,0.95)';
+      ctx.fillRect(windowGeometry.x, barY, windowGeometry.w * hpRatio, barThickness);
+    }
   }
 }
 
@@ -1597,6 +1919,7 @@ function draw() {
   ctx.translate(-camera.x, -camera.y);
   drawFloor();
   drawWalls();
+  drawWindows();
   drawDoors();
   drawCorpses();
   drawLamps();
@@ -1607,6 +1930,7 @@ function draw() {
   measurePerf('fogMs', drawFog);
   drawHiddenEnemiesDebug();
   drawDoorHealthBars();
+  drawWindowHealthBars();
   drawSoundEvents();
   drawFireGuide();
   drawAimAssistReticle();
@@ -1665,12 +1989,18 @@ function loop(frameTime) {
 
 window.addEventListener('tuningchange', (event) => {
   const key = event.detail?.key;
-  if (!key || !['doorMaxHp', 'soundClosedDoorTransmission'].includes(key)) return;
-  applyDoorTuning(true);
+  if (!key) return;
+  if (['doorMaxHp', 'doorProjectileResistance', 'soundClosedDoorTransmission'].includes(key)) {
+    applyDoorTuning(true);
+  }
+  if (['windowMaxHp', 'windowProjectileResistance'].includes(key)) {
+    applyWindowTuning(true);
+  }
 });
 
 initLighting(MISSION_LIGHTING);
 resetDoors();
+resetWindows();
 resetCamera();
 initPickup();
 initExfil();

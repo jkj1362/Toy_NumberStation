@@ -1,5 +1,7 @@
 # Feature 11 - Health, Damage, Death, and Corpses
 
+**Status: Implemented for the current unarmored prototype.**
+
 ## Purpose
 
 Add a concrete combat consequence and failure state for the night mission while keeping the system simple enough to tune before the later aim/lock-on/fire redesign.
@@ -9,6 +11,7 @@ Add a concrete combat consequence and failure state for the night mission while 
 - Player max HP is `100`.
 - Enemy max HP is `100`; player and enemy HP should work by the same basic rules.
 - Player projectile damage is `100`, so an unarmored standard enemy dies from one player shot.
+- Standard projectile penetration power is `1.0` against `1.0` unarmored body resistance, so the shot stops in that first enemy. Stronger projectile power is an implemented tuning hook owned by Feature 14; player-facing ammunition progression remains deferred.
 - Enemy projectile damage is `50`.
 - Enemy melee damage is `25`.
 - Enemy melee attacks use a short cooldown so contact does not drain HP every frame.
@@ -103,4 +106,4 @@ Important note for the later feature: armor should be displayed as its own integ
 - Healing, armor, stagger, bleed, revives, critical hits, corpse loot, body hiding, and campaign consequences.
 - Weapon-specific damage tuning beyond the current single player projectile and current enemy attacks.
 - Integration with the future aim/lock-on/fire system.
-- Moving hardcoded damage and HP values into the gameplay tuner.
+- Persisting authored gameplay-tuning values beyond the current runtime-only panel.

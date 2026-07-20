@@ -22,6 +22,9 @@ function soundTunedUnit(key, fallback) {
 
 function soundGunshotRadius() { return soundTunedUnit('soundGunshotRadius', 350); }
 function soundProjectileImpactRadius() { return soundTunedUnit('soundProjectileImpactRadius', 220); }
+function soundWindowImpactRadius() { return soundTunedUnit('soundWindowImpactRadius', 90); }
+function soundMetalDoorImpactRadius() { return soundTunedUnit('soundMetalDoorImpactRadius', 260); }
+function soundGeometryDestructionRadius() { return soundTunedUnit('soundGeometryDestructionRadius', 240); }
 function soundFootstepRadius() { return soundTunedUnit('soundFootstepRadius', 120); }
 function soundBodyFallRadius() { return soundTunedUnit('soundBodyFallRadius', 140); }
 function soundWallTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundWallTransmission', SOUND_WALL_TRANSMISSION) : SOUND_WALL_TRANSMISSION; }
@@ -150,7 +153,7 @@ function getDoorById(id) {
 
 function getDoorSoundTransmission(doorId) {
   const door = getDoorById(doorId);
-  if (!door || door.state === 'open' || door.state === 'destroyed') return 1;
+  if (!door || door.state === 'open' || door.state === 'closing' || door.state === 'destroyed') return 1;
   return typeof door.soundTransmission === 'number'
     ? door.soundTransmission
     : soundDefaultClosedDoorTransmission();
@@ -380,6 +383,13 @@ function evaluateEnemySound(e, sound) {
   return path;
 }
 
+function getEnemySoundReactionPoint(path) {
+  if (path.localization === 'muffled' && path.proxyDoorId !== null) {
+    return { x: path.proxyX, y: path.proxyY };
+  }
+  return { x: path.perceivedX, y: path.perceivedY };
+}
+
 function evaluatePlayerSound(sound) {
   if (typeof player === 'undefined' || !player) return null;
   const path = evaluateSoundPath(sound.x, sound.y, player.x, player.y, sound.radius);
@@ -416,11 +426,29 @@ function getSoundCueMagnitude(sound, path) {
 }
 
 function getPlayerDoorCueProxy(path) {
-  if (path.portals && path.portals.length) return path.portals[path.portals.length - 1];
+  if (path.proxyDoorId !== null && path.proxyDoorId !== undefined && path.portals?.length) {
+    const attenuatingPortal = path.portals.find(portal => portal.doorId === path.proxyDoorId);
+    if (attenuatingPortal) return attenuatingPortal;
+  }
   if (typeof path.proxyX === 'number' && typeof path.proxyY === 'number') {
     return { x: path.proxyX, y: path.proxyY, doorId: path.proxyDoorId ?? null };
   }
   return null;
+}
+
+function pointsAreOnOppositeDoorSides(door, sourceX, sourceY, listenerX, listenerY) {
+  if (!door || door.state !== 'closed') return false;
+  const center = door.orientation === 'horizontal'
+    ? door.y + door.h / 2
+    : door.x + door.w / 2;
+  const sourceSide = door.orientation === 'horizontal' ? sourceY - center : sourceX - center;
+  const listenerSide = door.orientation === 'horizontal' ? listenerY - center : listenerX - center;
+  return sourceSide * listenerSide < 0;
+}
+
+function doorCueStillCrossesDoor(cue) {
+  const door = cue.doorId ? getDoorById(cue.doorId) : null;
+  return pointsAreOnOppositeDoorSides(door, cue.sourceX, cue.sourceY, player.x, player.y);
 }
 
 function pushPlayerSoundCue(sound, path) {
@@ -456,7 +484,8 @@ function pushPlayerSoundCue(sound, path) {
 
   if (path.localization === 'muffled') {
     const proxy = getPlayerDoorCueProxy(path);
-    if (proxy) {
+    const door = proxy?.doorId ? getDoorById(proxy.doorId) : null;
+    if (proxy && pointsAreOnOppositeDoorSides(door, sound.x, sound.y, player.x, player.y)) {
       playerSoundCueEvents.push({
         ...baseCue,
         cueType: 'door-cone',
@@ -465,8 +494,8 @@ function pushPlayerSoundCue(sound, path) {
         doorId: proxy.doorId,
         angle: Math.atan2(player.y - proxy.y, player.x - proxy.x),
       });
-      return;
     }
+    return;
   }
 
   playerSoundCueEvents.push({
@@ -540,7 +569,8 @@ function emitSoundEvent(sound) {
       if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y) || e.doorInvestigation) continue;
     }
 
-    applySoundReaction(e, path.perceivedX, path.perceivedY);
+    const reactionPoint = getEnemySoundReactionPoint(path);
+    applySoundReaction(e, reactionPoint.x, reactionPoint.y, sound.isGunshot ? 'gunshot' : 'sound');
   }
 }
 
@@ -576,7 +606,8 @@ function notifyPlayerMoved() {
         typeof scheduleMuffledDoorInvestigation === 'function') {
       if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y) || e.doorInvestigation) continue;
     }
-    applySoundReaction(e, path.perceivedX, path.perceivedY);
+    const reactionPoint = getEnemySoundReactionPoint(path);
+    applySoundReaction(e, reactionPoint.x, reactionPoint.y);
   }
 }
 
@@ -624,10 +655,10 @@ function drawPlayerDoorConeCue(cue, fade, progress) {
   let angle;
   if (door?.orientation === 'horizontal') {
     const doorY = door.y + door.h / 2;
-    angle = cue.sourceY < doorY ? Math.PI / 2 : -Math.PI / 2;
+    angle = player.y > doorY ? Math.PI / 2 : -Math.PI / 2;
   } else if (door?.orientation === 'vertical') {
     const doorX = door.x + door.w / 2;
-    angle = cue.sourceX < doorX ? 0 : Math.PI;
+    angle = player.x > doorX ? 0 : Math.PI;
   } else {
     angle = Math.atan2(cue.proxyY - cue.sourceY, cue.proxyX - cue.sourceX);
   }
@@ -691,6 +722,7 @@ function drawPlayerSoundCueEvents() {
     const fade = cue.life / cue.maxLife;
     const progress = 1 - fade;
     if (cue.cueType === 'door-cone') {
+      if (!doorCueStillCrossesDoor(cue)) continue;
       drawPlayerDoorConeCue(cue, fade, progress);
     } else if (cue.cueType === 'wall-pulse') {
       drawPlayerWallPulseCue(cue, fade, progress);

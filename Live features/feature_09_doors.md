@@ -1,34 +1,31 @@
 # Live Feature 09 - Door System
 
-**Live status: First pass implemented; manual visual QA and tuning pending.**
+**Live status: Implemented for wooden and reinforced metal doors; final tuning remains.**
 
-Doors are dynamic geometry. They affect movement, raycasting, lighting, enemy pathing, projectiles, interaction, and sound events.
+Doors are animated dynamic geometry. They affect movement, raycasting, lighting, enemy pathing, projectiles, interaction, and sound.
 
 ## Current Behavior
 
-- Five closed doors are authored in existing wall gaps.
-- Doors start closed with `60` HP.
+- The facility has thin destructible wooden doors and one reinforced metal door at `room_f_west_door`.
+- Wooden doors have `200` HP, take `20` damage per standard hit, survive nine shots, and break on the tenth. Penetration creates persistent bullet holes but does not destroy the panel until HP reaches zero.
+- The metal door uses the former `18`-unit thick panel, has no HP, is non-destructible, and blocks every projectile.
 - Pressing `E` or gamepad face-left / button `2` toggles a nearby intact door.
-- Closed doors are movement blockers and ray blockers.
-- Open doors are passable, but the rotated open panel is still a ray blocker.
-- Destroyed doors are passable and do not add blocker geometry.
-- Door state toggles linked lighting apertures, with open doors casting stronger light spill into the room on the other side.
-- Door changes mark ray geometry and static lighting dirty.
-- Player projectiles and enemy projectiles can damage closed doors.
-- Closed doors draw an HP bar whenever the door is in the player's vision cone, regardless of lighting.
-- At zero HP, a door becomes destroyed and emits a louder sound event.
-- Closed doors leak sound at reduced strength using `soundTransmission`, currently `0.8`.
-- Open and destroyed doors do not attenuate sound.
-- Door interaction is blocked if an enemy occupies the doorway or swing/panel space.
-- Enemies can auto-open nearby closed doors while pathing or patrolling.
+- Doors open away from the interacting actor. Wooden doors swing over `12` frames; the heavier metal door uses `24`. Closing follows the same path in reverse.
+- A closing actor stays on the side where closing began instead of being transferred through the doorway when the closed blocker returns.
+- Closed panels block movement, vision, light, and projectiles according to their material.
+- Opening, open, and closing panels retain rotated physical geometry. The panel blocks character paths and sight; only the unobstructed part of the aperture is passable.
+- Destroyed wooden doors remove their blocker, leave debris, and emit a destruction sound.
+- Intact wooden doors are projectile-penetrable in every state—closed, opening, open, or closing—and display their debug HP near the current panel when visible in the player's cone.
+- Open and destroyed apertures transmit sound fully. Closed doors attenuate sound using `soundTransmission`, currently `0.8`.
+- Interaction/closing is blocked when an actor occupies the doorway or swing space.
+- Enemies can open doors while navigating, route around swung panels, cross into open room space, and close only doors owned by their investigation sequence when safe.
 
 ## Current Caveats
 
-- Door placement, light leakage, door HP bar presentation, and enemy door behavior need direct visual QA.
-- Door destruction is currently represented by simple debris pieces; richer shatter/break visuals are deferred.
-- Door animation is instant.
+- Door HP bars and state labels are debug presentation and are intended to be hidden or removed later.
+- Destruction uses simple debris; richer break visuals are deferred.
 - There are no locked, keyed, half-open, or peek states.
-- Door acoustic tuning is first pass and may need playtest adjustment.
+- Animation timing, panel thickness, sound, and light leakage remain tunable.
 
 ## Related Files
 
@@ -37,3 +34,4 @@ Doors are dynamic geometry. They affect movement, raycasting, lighting, enemy pa
 - `lighting.js`
 - `sound.js`
 - `enemy.js`
+- `tuning.js`

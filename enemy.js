@@ -32,7 +32,7 @@ const ENEMY_HIT_RADIUS  = scaleEnemyUnit(20);
 const ALERT_FRAMES      = 180;   // 3 s at 60 fps
 const SUSPICION_TIMEOUT = 300;   //  5 s at 60 fps ??no-input timeout for level-1 suspicion
 const REACTION_DELAY    = 45;    // 0.75 s ??window of opportunity before enemy reacts
-const SUSPICION_CONFIRM_DELAY = 75; // 1.25 s ??suspicious stimulus must settle before alert
+const SUSPICION_CONFIRM_DELAY = 10; // brief confirmation when an already-suspicious guard detects another stimulus
 const ARRIVAL_RADIUS    = scaleEnemyUnit(8);     // px ??enemy considered "at" a waypoint within this distance
 const ENEMY_RADIUS      = scaleEnemyUnit(16);    // px ??collision radius for pushOutOfWalls during patrol
 const ENEMY_PROJECTILE_HIT_RADIUS = scaleEnemyUnit(18);
@@ -81,6 +81,8 @@ function enemyDoorwayOpenRadius() { return enemyRadius() + enemyDoorwayArrivalRa
 function enemyVisionAngle() { return typeof getTuningRadians === 'function' ? getTuningRadians('enemyVisionAngleDegrees', 120) : STANDARD_VISION; }
 function enemyProximityRadius() { return enemyTunedUnit('enemyProximityRadius', 50); }
 function enemyPatrolSpeed() { return enemyTunedUnit('enemyPatrolSpeed', 1.5); }
+function enemySuspiciousSpeed() { return enemyTunedUnit('enemySuspiciousSpeed', 1.2); }
+function enemyAlertMoveSpeed() { return enemyTunedUnit('enemyAlertSpeed', 2.5); }
 function enemyShootingRange() { return enemyTunedUnit('enemyShootingRange', 360); }
 function enemyShootingRangeTolerance() { return enemyTunedUnit('enemyShootingRangeTolerance', 40); }
 function enemyShotCooldownFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyShotCooldownFrames', 75) : 75; }
@@ -127,6 +129,11 @@ function _pointHitsExpandedWall(x, y, radius = enemyRadius()) {
       return true;
     }
   }
+  if (typeof pointHitsDoorPanel === 'function' && typeof DOORS !== 'undefined') {
+    for (const door of DOORS) {
+      if (pointHitsDoorPanel(door, x, y, radius)) return true;
+    }
+  }
   return false;
 }
 
@@ -140,6 +147,44 @@ function _pathSegmentClear(x1, y1, x2, y2, radius = enemyRadius()) {
     if (_pointHitsExpandedWall(x1 + dx * t, y1 + dy * t, radius)) return false;
   }
   return true;
+}
+
+function _pathSegmentHitsOpenDoorPanel(x1, y1, x2, y2, radius = enemyRadius()) {
+  if (typeof pointHitsDoorPanel !== 'function' || typeof DOORS === 'undefined') return false;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const steps = Math.max(1, Math.ceil(dist / Math.max(1, radius * 0.5)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    for (const door of DOORS) {
+      if (pointHitsDoorPanel(door, x1 + dx * t, y1 + dy * t, radius)) return true;
+    }
+  }
+  return false;
+}
+
+function _getOpenDoorDetourNodes(radius = enemyRadius()) {
+  if (typeof DOORS === 'undefined' || typeof getDoorHinge !== 'function' ||
+      typeof rotateDoorPoint !== 'function' || typeof getDoorSwingAngle !== 'function') return {};
+  const nodes = {};
+  const clearance = radius + scaleEnemyUnit(4);
+  for (const door of DOORS) {
+    if (door.state === 'closed' || door.state === 'destroyed') continue;
+    const hinge = getDoorHinge(door);
+    const angle = getDoorSwingAngle(door);
+    const localCorners = [
+      { x: hinge.rectX - clearance, y: hinge.rectY - clearance },
+      { x: hinge.rectX + door.w + clearance, y: hinge.rectY - clearance },
+      { x: hinge.rectX + door.w + clearance, y: hinge.rectY + door.h + clearance },
+      { x: hinge.rectX - clearance, y: hinge.rectY + door.h + clearance },
+    ];
+    localCorners.forEach((point, index) => {
+      const rotated = rotateDoorPoint(point.x, point.y, angle);
+      nodes[`door_${door.id}_${index}`] = { x: hinge.x + rotated.x, y: hinge.y + rotated.y };
+    });
+  }
+  return nodes;
 }
 
 function _pointNearNavGap(x, y) {
@@ -180,7 +225,7 @@ function _findDoorwayTransitDoor(x, y) {
   const pad = enemyRadius() * 0.75;
 
   for (const door of DOORS) {
-    if (door.state !== 'open' && door.state !== 'destroyed') continue;
+    if (door.state !== 'open' && door.state !== 'closing' && door.state !== 'destroyed') continue;
     const left = door.x - pad;
     const right = door.x + door.w + pad;
     const top = door.y - pad;
@@ -202,17 +247,21 @@ function _findDoorwayTransitDoor(x, y) {
 function _doorwayTransitTarget(door, targetX, targetY) {
   const cx = door.x + door.w / 2;
   const cy = door.y + door.h / 2;
+  const laneInset = enemyRadius() * 1.4;
 
   if (door.orientation === 'horizontal') {
     const exitY = targetY >= cy ? door.y + door.h + enemyRadius() : door.y - enemyRadius();
-    return { x: cx, y: exitY };
+    const laneX = door.state === 'destroyed' ? cx : Math.max(cx, door.x + door.w - laneInset);
+    return { x: laneX, y: exitY };
   }
 
   const exitX = targetX >= cx ? door.x + door.w + enemyRadius() : door.x - enemyRadius();
-  return { x: exitX, y: cy };
+  const laneY = door.state === 'destroyed' ? cy : Math.max(cy, door.y + door.h - laneInset);
+  return { x: exitX, y: laneY };
 }
 
 function _waypointArrivalRadius(wp) {
+  if (typeof wp.arrivalRadius === 'number') return wp.arrivalRadius;
   return _pointNearDoorway(wp.x, wp.y) ? enemyDoorwayArrivalRadius() : enemyArrivalRadius();
 }
 
@@ -261,8 +310,17 @@ function _stepEnemyToward(e, targetX, targetY) {
   const d = Math.sqrt(d2);
   const prevX = e.x;
   const prevY = e.y;
-  e.x += (dx / d) * e.patrolSpeed;
-  e.y += (dy / d) * e.patrolSpeed;
+  const returningFromSuspicion = e.state === 'suspicious' && (
+    e.suspicionPhase === 'returning' ||
+    e.suspicionPhase === 'door_exiting' ||
+    e.suspicionPhase === 'door_closing' ||
+    e.suspicionPhase === 'door_returning'
+  );
+  const movementSpeed = e.state === 'alert'
+    ? enemyAlertMoveSpeed()
+    : (e.state === 'suspicious' && !returningFromSuspicion ? enemySuspiciousSpeed() : e.patrolSpeed);
+  e.x += (dx / d) * movementSpeed;
+  e.y += (dy / d) * movementSpeed;
   e.targetAngle = Math.atan2(dx, -dy);
   pushOutOfWalls(e, enemyRadius());
   pushOutOfWalls(e, enemyRadius());
@@ -271,7 +329,7 @@ function _stepEnemyToward(e, targetX, targetY) {
   const newDx = targetX - e.x;
   const newDy = targetY - e.y;
   const newD2 = newDx * newDx + newDy * newDy;
-  const minProgressSq = Math.max(0.01, (e.patrolSpeed * 0.25) ** 2);
+  const minProgressSq = Math.max(0.01, (movementSpeed * 0.25) ** 2);
   const closer = newD2 < d2 - minProgressSq;
   const step = {
     moved: movedDist >= 0.1,
@@ -290,38 +348,45 @@ function _getDoorById(doorId) {
 function _getDoorInvestigationPoints(door, listenerX, listenerY) {
   const cx = door.x + door.w / 2;
   const cy = door.y + door.h / 2;
-  const offset = enemyRadius() * 1.6;
+  const approachOffset = enemyRadius() * 1.6;
+  const sweepDepth = Math.max(door.w, door.h) + enemyRadius() * 2;
+  const laneInset = enemyRadius() * 1.4;
 
   if (door.orientation === 'horizontal') {
     const listenerSign = listenerY < cy ? -1 : 1;
+    const laneX = Math.max(cx, door.x + door.w - laneInset);
     return {
-      approachX: cx,
-      approachY: cy + listenerSign * (door.h / 2 + offset),
-      searchX: cx,
-      searchY: cy - listenerSign * (door.h / 2 + offset),
+      approachX: laneX,
+      approachY: cy + listenerSign * (door.h / 2 + approachOffset),
+      searchX: laneX,
+      searchY: cy - listenerSign * (door.h / 2 + sweepDepth),
     };
   }
 
   const listenerSign = listenerX < cx ? -1 : 1;
+  const laneY = Math.max(cy, door.y + door.h - laneInset);
   return {
-    approachX: cx + listenerSign * (door.w / 2 + offset),
-    approachY: cy,
-    searchX: cx - listenerSign * (door.w / 2 + offset),
-    searchY: cy,
+    approachX: cx + listenerSign * (door.w / 2 + approachOffset),
+    approachY: laneY,
+    searchX: cx - listenerSign * (door.w / 2 + sweepDepth),
+    searchY: laneY,
   };
 }
 
 // Ordered [{x,y}] waypoints through the nav graph. Start and goal are connected
 // only to nodes they can actually reach without crossing expanded wall collision.
 function buildPath(fromX, fromY, toX, toY) {
+  const doorDetourNodes = _getOpenDoorDetourNodes();
   const nodes = {
     start: { x: fromX, y: fromY },
     goal:  { x: toX, y: toY },
     ...NAV_NODES,
+    ...doorDetourNodes,
   };
   const adj = {};
   for (const id in nodes) adj[id] = [];
   for (const [u, v] of NAV_EDGES) {
+    if (_pathSegmentHitsOpenDoorPanel(nodes[u].x, nodes[u].y, nodes[v].x, nodes[v].y)) continue;
     adj[u].push(v);
     adj[v].push(u);
   }
@@ -333,10 +398,12 @@ function buildPath(fromX, fromY, toX, toY) {
     }
   };
 
-  connectDynamic('start', 'goal');
-  for (const id in NAV_NODES) {
-    connectDynamic('start', id);
-    connectDynamic('goal', id);
+  const dynamicIds = ['start', 'goal', ...Object.keys(doorDetourNodes)];
+  for (const dynamicId of dynamicIds) {
+    for (const id in nodes) {
+      if (id === dynamicId || adj[dynamicId].includes(id)) continue;
+      connectDynamic(dynamicId, id);
+    }
   }
 
   const prev = { start: null };
@@ -464,6 +531,7 @@ function resetEnemies() {
     playerVisibleThisFrame: false,
     observedCorpses:    new Set(),
     observedDoorEvidence: new Map(),
+    observedBrokenLamps: new Set(),
     observedAlertEpisodes: new Set(),
     suspicionLevel:     0,    // how many times enemy has entered suspicious from patrol
     suspicionPhase:     'turning', // 'turning'|'moving'|'searching'|'returning'
@@ -538,6 +606,8 @@ function enemyAlertReasonPriority(reason) {
     case 'player':        return 500;
     case 'corpse':        return 400;
     case 'door-impact':   return 300;
+    case 'lamp-impact':   return 300;
+    case 'gunshot':       return 275;
     case 'door':          return 250;
     case 'alerted-enemy': return 200;
     case 'sound':         return 100;
@@ -596,19 +666,23 @@ function scheduleDamagedDoorInvestigation(e, doorId) {
 
 // Apply sound-triggered state transitions for one enemy.
 // Used by both emitSound (gunshots/footsteps) and notifyPlayerMoved.
-function applySoundReaction(e, sourceX, sourceY) {
+function applySoundReaction(e, sourceX, sourceY, reason = 'sound') {
   const angle = Math.atan2(sourceX - e.x, -(sourceY - e.y));
   if (e.state === 'patrol') {
-    scheduleReaction(e, 'suspicious', angle, sourceX, sourceY);
+    scheduleReaction(e, 'suspicious', angle, sourceX, sourceY, enemyReactionDelay(), reason);
   } else if (e.state === 'suspicious') {
     // Second sound while suspicious ??confirmed alert after a short lock-on delay.
     e.targetAngle = angle;
-    scheduleReaction(e, 'alert', angle, sourceX, sourceY, enemySuspicionConfirmDelay());
+    scheduleReaction(e, 'alert', angle, sourceX, sourceY, enemySuspicionConfirmDelay(), reason);
   } else if (e.state === 'searching' || e.state === 'returning' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
     // Already on edge ??any sound snaps straight to alert, skipping suspicion delay
-    enterEnemyAlert(e, sourceX, sourceY, false, 'sound');
+    enterEnemyAlert(e, sourceX, sourceY, false, reason);
   } else if (e.state === 'alert') {
-    e.alertTimer = enemyAlertFrames(); // refresh
+    if (enemyAlertReasonPriority(reason) >= enemyAlertReasonPriority(e.alertReason)) {
+      enterEnemyAlert(e, sourceX, sourceY, false, reason);
+    } else {
+      e.alertTimer = enemyAlertFrames();
+    }
   }
 }
 
@@ -688,6 +762,39 @@ function applyVisibleCorpseOverride(e) {
   return true;
 }
 
+function getLampEvidenceId(lamp) {
+  return lamp?.projectileTargetId ?? null;
+}
+
+function getLampInvestigationPoint(lamp) {
+  const standOff = enemyRadius() + scaleEnemyUnit(8);
+  if (lamp.wallSide === 'N') return { x: lamp.lightX, y: lamp.lightY + standOff };
+  if (lamp.wallSide === 'S') return { x: lamp.lightX, y: lamp.lightY - standOff };
+  if (lamp.wallSide === 'E') return { x: lamp.lightX - standOff, y: lamp.lightY };
+  return { x: lamp.lightX + standOff, y: lamp.lightY };
+}
+
+function scheduleBrokenLampInvestigation(e, stimulus) {
+  if (!stimulus || e.state === 'alert' || e.reactionTimer > 0) return false;
+  const angle = Math.atan2(stimulus.x - e.x, -(stimulus.y - e.y));
+  scheduleReaction(e, 'suspicious', angle, stimulus.x, stimulus.y, enemyReactionDelay(), 'broken-lamp');
+  if (!e.pendingReaction) return false;
+  e.pendingReaction.forceInvestigation = true;
+  return true;
+}
+
+function notifyLampDestroyed(lamp, impactX, impactY, sourceActor = null) {
+  const lampId = getLampEvidenceId(lamp);
+  if (!lamp || !lampId) return;
+  const investigationPoint = getLampInvestigationPoint(lamp);
+  for (const e of enemies) {
+    if (e === sourceActor || e.alive === false) continue;
+    if (!enemyCanSeeWorldPoint(e, impactX, impactY, false)) continue;
+    e.observedBrokenLamps.add(lampId);
+    enterEnemyAlert(e, investigationPoint.x, investigationPoint.y, false, 'lamp-impact');
+  }
+}
+
 function detectLocalVisualStimulus(e, skipCorpses = false) {
   if (!skipCorpses) {
     const corpseStimulus = detectVisibleCorpseStimulus(e);
@@ -710,6 +817,22 @@ function detectLocalVisualStimulus(e, skipCorpses = false) {
         damaged: door.state !== 'destroyed',
         x,
         y,
+      };
+    }
+  }
+
+  if (typeof lightingLamps !== 'undefined' && Array.isArray(lightingLamps)) {
+    for (const lamp of lightingLamps) {
+      const lampId = getLampEvidenceId(lamp);
+      if (lamp.active || !lampId || e.observedBrokenLamps.has(lampId)) continue;
+      if (!enemyCanSeeWorldPoint(e, lamp.lightX, lamp.lightY, false)) continue;
+      e.observedBrokenLamps.add(lampId);
+      const investigationPoint = getLampInvestigationPoint(lamp);
+      return {
+        type: 'broken-lamp',
+        lampId,
+        x: investigationPoint.x,
+        y: investigationPoint.y,
       };
     }
   }
@@ -1017,7 +1140,7 @@ function beginDoorInvestigation(e, request, originalAngle) {
 function beginDoorInvestigationReturn(e) {
   const info = e.doorInvestigation;
   e.suspicionPhase = 'door_exiting';
-  e.searchPath = [{ x: info.approachX, y: info.approachY }];
+  e.searchPath = [{ x: info.approachX, y: info.approachY, arrivalRadius: enemyArrivalRadius() }];
   e.searchPathIndex = 0;
 }
 
@@ -1055,7 +1178,7 @@ function updateDoorInvestigation(e) {
         setDoorState(door, 'open', e);
       }
       e.suspicionPhase = 'door_entering';
-      e.searchPath = [{ x: info.searchX, y: info.searchY }];
+      e.searchPath = [{ x: info.searchX, y: info.searchY, arrivalRadius: enemyArrivalRadius() }];
       e.searchPathIndex = 0;
     }
     return;
@@ -1220,6 +1343,51 @@ function updateAlertDoorTransit(e) {
   }
 }
 
+function resolveEnemySeparation() {
+  const radius = enemyRadius();
+  const minimumDistance = radius * 2;
+  const minimumDistanceSq = minimumDistance * minimumDistance;
+
+  for (let pass = 0; pass < 8; pass++) {
+    let foundOverlap = false;
+    for (let i = 0; i < enemies.length; i++) {
+      const a = enemies[i];
+      if (a.alive === false) continue;
+      for (let j = i + 1; j < enemies.length; j++) {
+        const b = enemies[j];
+        if (b.alive === false) continue;
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let distanceSq = dx * dx + dy * dy;
+        if (distanceSq >= minimumDistanceSq) continue;
+        foundOverlap = true;
+
+        let distance = Math.sqrt(distanceSq);
+        if (distance < 0.0001) {
+          const angle = ((i + 1) * 2.399963229728653 + (j + 1) * 0.7548776662466927) % (Math.PI * 2);
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        } else {
+          dx /= distance;
+          dy /= distance;
+        }
+
+        const correction = (minimumDistance - distance) * 0.5 + 0.01;
+        a.x -= dx * correction;
+        a.y -= dy * correction;
+        b.x += dx * correction;
+        b.y += dy * correction;
+        if (typeof pushOutOfWalls === 'function') {
+          pushOutOfWalls(a, radius);
+          pushOutOfWalls(b, radius);
+        }
+      }
+    }
+    if (!foundOverlap) break;
+  }
+}
+
 function updateEnemies() {
   if (typeof updateSoundEvents === 'function') updateSoundEvents();
   updateEnemyProjectiles();
@@ -1227,6 +1395,10 @@ function updateEnemies() {
 
   for (const e of enemies) {
     e.playerVisibleThisFrame = false;
+    if (e.alive !== false && typeof pushOutOfWalls === 'function') {
+      pushOutOfWalls(e, enemyRadius());
+      pushOutOfWalls(e, enemyRadius());
+    }
 
     // 1. Tick reaction delay ??apply pending state change when it expires
     if (e.reactionTimer > 0) {
@@ -1248,7 +1420,7 @@ function updateEnemies() {
             beginDoorInvestigation(e, pending.doorInvestigation, savedAngle);
           } else if (pending.damagedDoorInvestigation) {
             beginDamagedDoorInvestigation(e, pending.damagedDoorInvestigation, savedAngle);
-          } else if (e.suspicionLevel >= 2) {
+          } else if (pending.forceInvestigation || e.suspicionLevel >= 2) {
             e.suspicionPhase      = 'moving';
             e.suspicionReturnX    = e.x;
             e.suspicionReturnY    = e.y;
@@ -1268,8 +1440,8 @@ function updateEnemies() {
       }
     }
 
-    // 2. Vision cone detection.
-    // Patrol/search detection is immediate; suspicious detection must confirm briefly.
+    // 2. Vision cone detection. Ordinary patrol has a readable reaction window;
+    // suspicious guards confirm quickly, while already-heightened states react immediately.
     if (enemyCanSeeCone(e)) {
       const angle = Math.atan2(player.x - e.x, -(player.y - e.y));
       e.playerVisibleThisFrame = true;
@@ -1279,6 +1451,8 @@ function updateEnemies() {
 
       if (e.state === 'suspicious') {
         scheduleReaction(e, 'alert', angle, player.x, player.y, enemySuspicionConfirmDelay(), 'player');
+      } else if (e.state === 'patrol' && e.cautiousTimer <= 0) {
+        scheduleReaction(e, 'alert', angle, player.x, player.y, enemyReactionDelay(), 'player');
       } else {
         enterEnemyAlert(e, player.x, player.y, true, 'player');
       }
@@ -1291,6 +1465,8 @@ function updateEnemies() {
         const stimulus = detectLocalVisualStimulus(e, true);
         if (stimulus?.type === 'door' && stimulus.damaged) {
           scheduleDamagedDoorInvestigation(e, stimulus.doorId);
+        } else if (stimulus?.type === 'broken-lamp') {
+          scheduleBrokenLampInvestigation(e, stimulus);
         } else if (stimulus) {
           enterEnemyAlert(e, stimulus.x, stimulus.y, false, stimulus.type);
         }
@@ -1301,7 +1477,8 @@ function updateEnemies() {
       const dx = player.x - e.x, dy = player.y - e.y;
       if (dx * dx + dy * dy <= e.proximityRadius * e.proximityRadius) {
         const angle = Math.atan2(player.x - e.x, -(player.y - e.y));
-        scheduleReaction(e, 'alert', angle, player.x, player.y, enemyReactionDelay(), 'player');
+        const delay = e.state === 'suspicious' ? enemySuspicionConfirmDelay() : enemyReactionDelay();
+        scheduleReaction(e, 'alert', angle, player.x, player.y, delay, 'player');
       }
     }
 
@@ -1447,6 +1624,8 @@ function updateEnemies() {
     if (e.hitFlashTimer > 0) e.hitFlashTimer--;
     if (e.meleeCooldownTimer > 0) e.meleeCooldownTimer--;
   }
+
+  resolveEnemySeparation();
 }
 
 function drawPlayerHitFlash() {
