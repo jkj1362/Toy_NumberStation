@@ -7,6 +7,7 @@ let lightingGlobalAmbient = LIGHT_GLOBAL_AMBIENT;
 let lightingLamps = [];
 let lightingZones = [];
 let lightingApertures = [];
+let muzzleFlashEvents = [];
 let lightCanvas = document.createElement('canvas');
 let lightCtx = lightCanvas.getContext('2d');
 const STATIC_LIGHT_RENDER_SCALE = 4;
@@ -41,6 +42,11 @@ function enemyBrightLightThreshold() {
     ? getTuningNumber('enemyBrightLightThreshold', ENEMY_BRIGHT_LIGHT_THRESHOLD)
     : ENEMY_BRIGHT_LIGHT_THRESHOLD;
 }
+
+function muzzleFlashRadius() { return lightingTunedUnit('muzzleFlashRadius', 420); }
+function muzzleFlashIntensity() { return typeof getTuningNumber === 'function' ? getTuningNumber('muzzleFlashIntensity', 1) : 1; }
+function muzzleFlashFalloffPower() { return typeof getTuningNumber === 'function' ? getTuningNumber('muzzleFlashFalloffPower', 1) : 1; }
+function muzzleFlashLifetimeFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('muzzleFlashLifetimeFrames', 4) : 4; }
 
 function clampLight(v) {
   return Math.max(0, Math.min(1, v));
@@ -116,6 +122,7 @@ function resetLighting() {
   for (const aperture of lightingApertures) {
     aperture.open = aperture.defaultOpen;
   }
+  muzzleFlashEvents.length = 0;
   staticLightDirty = true;
   staticLightImageData = null;
 }
@@ -267,6 +274,45 @@ function computeLampVisibilityPolygon(lamp) {
   return rays;
 }
 
+function emitMuzzleFlash(data) {
+  if (!data || typeof data.x !== 'number' || typeof data.y !== 'number') return null;
+  const life = Math.max(1, muzzleFlashLifetimeFrames());
+  const flash = {
+    x: data.x,
+    y: data.y,
+    lightX: data.x,
+    lightY: data.y,
+    radius: muzzleFlashRadius(),
+    intensity: muzzleFlashIntensity(),
+    falloffPower: muzzleFlashFalloffPower(),
+    life,
+    maxLife: life,
+    shotId: data.shotId ?? null,
+    sourceActor: data.sourceActor ?? null,
+    sourceType: data.sourceType ?? 'unknown',
+  };
+  flash.visibilityPolygon = computeLampVisibilityPolygon(flash);
+  muzzleFlashEvents.push(flash);
+  while (muzzleFlashEvents.length > 16) muzzleFlashEvents.shift();
+  return flash;
+}
+
+function getMuzzleFlashEvents() {
+  return muzzleFlashEvents;
+}
+
+function updateMuzzleFlashes() {
+  for (let i = muzzleFlashEvents.length - 1; i >= 0; i--) {
+    const flash = muzzleFlashEvents[i];
+    flash.life--;
+    if (flash.life <= 0) {
+      muzzleFlashEvents.splice(i, 1);
+      continue;
+    }
+    flash.visibilityPolygon = computeLampVisibilityPolygon(flash);
+  }
+}
+
 function castApertureRay(aperture, angle) {
   const hit = castVisRay(aperture.x, aperture.y, angle);
   const dx = Math.cos(angle);
@@ -356,6 +402,19 @@ function getPlayerGlowContribution(wx, wy) {
   return t <= 0.4 ? 1 : (1 - t) / 0.6;
 }
 
+function getMuzzleFlashContribution(wx, wy) {
+  let light = 0;
+  for (const flash of muzzleFlashEvents) {
+    if (flash.life <= 0 || !flash.visibilityPolygon || !pointInPolygon(flash.visibilityPolygon, wx, wy)) continue;
+    const dist = Math.hypot(wx - flash.x, wy - flash.y);
+    if (dist > flash.radius) continue;
+    const t = dist / flash.radius;
+    const lifeScale = flash.life / Math.max(1, flash.maxLife);
+    light = Math.max(light, flash.intensity * lifeScale * Math.pow(1 - t, flash.falloffPower));
+  }
+  return clampLight(light);
+}
+
 function getZoneAmbient(wx, wy) {
   let ambient = 0;
   for (const zone of lightingZones) {
@@ -369,6 +428,7 @@ function getZoneAmbient(wx, wy) {
 
 function getLightLevel(wx, wy, options = {}) {
   let light = getStaticLightLevel(wx, wy);
+  light = Math.max(light, getMuzzleFlashContribution(wx, wy));
 
   if (options.includePlayerGlow === true) {
     light = Math.max(light, getPlayerGlowContribution(wx, wy));
@@ -533,6 +593,63 @@ function drawPlayerGlow(offsetX = 0, offsetY = 0, renderScale = 1) {
   lightCtx.beginPath();
   lightCtx.arc(glowX, glowY, glowRadius, 0, Math.PI * 2);
   lightCtx.fill();
+}
+
+function drawMuzzleFlashLights(offsetX = 0, offsetY = 0, renderScale = 1) {
+  for (const flash of muzzleFlashEvents) {
+    if (flash.life <= 0 || !flash.visibilityPolygon || flash.visibilityPolygon.length < 3) continue;
+    const lifeScale = flash.life / Math.max(1, flash.maxLife);
+    const lightX = (flash.x - offsetX) / renderScale;
+    const lightY = (flash.y - offsetY) / renderScale;
+    const radius = flash.radius / renderScale;
+
+    lightCtx.save();
+    lightCtx.beginPath();
+    lightCtx.moveTo(
+      (flash.visibilityPolygon[0].x - offsetX) / renderScale,
+      (flash.visibilityPolygon[0].y - offsetY) / renderScale
+    );
+    for (let i = 1; i < flash.visibilityPolygon.length; i++) {
+      lightCtx.lineTo(
+        (flash.visibilityPolygon[i].x - offsetX) / renderScale,
+        (flash.visibilityPolygon[i].y - offsetY) / renderScale
+      );
+    }
+    lightCtx.closePath();
+    lightCtx.clip();
+
+    const intensity = clampLight(flash.intensity * lifeScale);
+    const falloffAt = (t) => intensity * Math.pow(1 - t, flash.falloffPower);
+    const gradient = lightCtx.createRadialGradient(lightX, lightY, 0, lightX, lightY, radius);
+    gradient.addColorStop(0, `rgba(255,255,255,${falloffAt(0)})`);
+    gradient.addColorStop(0.45, `rgba(255,255,255,${falloffAt(0.45)})`);
+    gradient.addColorStop(0.8, `rgba(255,255,255,${falloffAt(0.8)})`);
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    lightCtx.fillStyle = gradient;
+    lightCtx.beginPath();
+    lightCtx.arc(lightX, lightY, radius, 0, Math.PI * 2);
+    lightCtx.fill();
+    lightCtx.restore();
+  }
+}
+
+function drawMuzzleFlashSources() {
+  for (const flash of muzzleFlashEvents) {
+    if (flash.life <= 0) continue;
+    const lifeScale = flash.life / Math.max(1, flash.maxLife);
+    ctx.save();
+    ctx.globalAlpha = lifeScale;
+    const radius = scaleGameUnit(12);
+    const gradient = ctx.createRadialGradient(flash.x, flash.y, 0, flash.x, flash.y, radius);
+    gradient.addColorStop(0, '#ffffff');
+    gradient.addColorStop(0.35, '#fff3b0');
+    gradient.addColorStop(1, 'rgba(255,196,80,0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(flash.x, flash.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 function resizeStaticLightCanvases(w, h) {
@@ -727,6 +844,7 @@ function drawLighting() {
 
   lightCtx.globalCompositeOperation = 'destination-out';
   drawPlayerGlow(camera.x, camera.y, DYNAMIC_LIGHT_RENDER_SCALE);
+  drawMuzzleFlashLights(camera.x, camera.y, DYNAMIC_LIGHT_RENDER_SCALE);
   lightCtx.globalCompositeOperation = 'source-over';
 
   ctx.drawImage(lightCanvas, camera.x, camera.y, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);

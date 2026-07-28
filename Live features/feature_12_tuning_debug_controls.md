@@ -17,11 +17,11 @@ The prototype has a collapsible in-game tuning/debug panel so balance values and
 
 ## Current Tunable Groups
 
-- Sound: muzzle, normal impact, glass impact, metal impact, destruction, footstep, body-fall, door transmission/detour, vague localization, cue lifetime, and enemy footstep values.
-- Lighting: ambient, visibility thresholds, lamp values, door aperture values, and exterior/window light integration values.
+- Sound: the shared `600` gunshot radius, normal impact, prominent glass/window impact, metal impact, destruction, footstep, body-fall, door transmission/detour, vague localization, cue lifetime, and enemy footstep values.
+- Lighting: ambient, visibility thresholds, lamp values, door aperture values, exterior/window light integration, and muzzle-flash radius/intensity/falloff/lifetime.
 - Player: walk/crouch/sprint speeds, noise, health/damage, collision, vision, aim assist, glow, and proximity.
-- Enemy: separate ordinary (`1.5`), suspicious (`1.2`), and alert (`2.5`) speeds; state timing; normal/suspicious reaction delays; collision/separation; vision; combat; shooting; and search sweeps.
-- Doors and mission: wooden-door HP/damage/resistance/thickness, glass HP/damage/resistance/thickness, metal-door behavior/thickness, swing durations, interaction/open angle, sound transmission, projectile/body resistance and power hooks, mission interaction, exfil, and corpse interaction.
+- Enemy: separate ordinary (`1.5`), suspicious (`1.2`), and alert (`2.5`) speeds; state timing; normal/suspicious reaction delays; event/shot memory; repeated-impact confirmation window; suspicion-team size; collision/separation; vision; combat; shooting; and search sweeps.
+- Doors and mission: normal wooden-door HP (`2000` by default), damage/resistance/thickness, glass HP/damage/resistance/thickness, metal-door behavior/thickness, swing durations, interaction/open angle, sound transmission, projectile/body resistance and power hooks, mission interaction, exfil, and corpse interaction.
 - Camera and input: camera lookahead/easing, hard-aim offsets, corner/occlusion padding, fog scale, and gamepad deadzone.
 
 ## Current Caveats

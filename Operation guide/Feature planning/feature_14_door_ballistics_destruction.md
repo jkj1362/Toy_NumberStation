@@ -1,6 +1,6 @@
 # Feature 14 - Geometry Ballistics, Penetration, and Impact Events
 
-**Status: Core implementation complete for the current Prototype 2 geometry. Feature 13 impact-reaction integration and final map-level validation remain.**
+**Status: Core implementation and Feature 13 impact-reaction integration are complete for the current Prototype 2 geometry. Stability playtesting and final map-level validation remain.**
 
 This feature establishes shared projectile behavior for destructible and blocking geometry. It owns penetration, physical door/window damage, bullet holes, and impact events. Feature 13 consumes those impact events for local AI reactions.
 
@@ -21,7 +21,7 @@ The first-pass pairings are:
 
 | Geometry | Destructible | Projectile behavior |
 |----------|--------------|---------------------|
-| Current wooden doors | Yes | Penetrate |
+| Current wooden doors | Yes, but ordinary-gun destruction is impractical | Penetrate |
 | Physical windows | Yes | Penetrate |
 | Normal walls | No | Block |
 | Reinforced/non-destructible metal door | No | Block |
@@ -72,7 +72,8 @@ The first-pass normalized values make an unobstructed standard bullet stop in th
 
 - Shooting an intact destructible door, whether closed, open, opening, or closing, applies the separate tunable door-damage amount and creates a persistent bullet hole at the entry impact. A penetrated door remains intact until accumulated door damage reduces its HP to zero.
 - Current destructible doors use a thin panel, distinct from the thicker non-destructible metal-door material. Their bullet hit geometry follows the swung panel in every intact state.
-- Normal destructible doors are tuned to survive nine standard hits and break on the tenth (`200` HP at `20` damage per hit).
+- Normal wooden doors are tuned to survive 99 standard hits and break on the hundredth (`2000` HP at `20` damage per hit). Ordinary bullets still penetrate and leave evidence, but shooting a complete door down is intentionally impractical during normal play.
+- Explosives are the intended future route for destroying normal wooden doors. Until explosive damage is implemented, the 100-hit threshold preserves the existing destruction pipeline as a stress/debug fallback rather than a normal firearm tactic.
 - Whether that hit merely damages or fully destroys the door is separate from penetration. The projectile continues only when its remaining penetration power exceeds the panel's resistance; otherwise it stops in the damaged/destroyed panel.
 - Door opening, closing, movement blocking, ray blocking, lighting apertures, and sound transmission continue to use door state and remain separate from projectile penetration.
 - Doors animate both opening and closing through the same swing path; closing is the exact reverse of opening. Wooden doors use `12` frames and the heavier metal door uses `24` frames by default.
@@ -87,7 +88,7 @@ The first-pass normalized values make an unobstructed standard bullet stop in th
 ## Impact Events and Sound
 
 - Firing creates the existing muzzle sound. Every collision with geometry creates a separate projectile-impact sound, regardless of whether the geometry penetrates or blocks.
-- Muzzle and impact sounds use separate tunable radii. The normal door/wall impact default is `220` design units versus the `350`-unit muzzle report. Glass impacts are much quieter at `90`; metal-door impacts are louder at `260` but remain below the muzzle report. Normal door and window destruction share the `240`-unit destruction radius. Their source positions remain distinct.
+- Muzzle and impact sounds use separate tunable radii. The current defaults are `600` design units for a gunshot, `420` for an ordinary wall/wood impact, `500` for the more-prominent window/glass impact, `480` for a metal-door impact, and `560` for same-object door/window destruction. Their source positions remain distinct, and ordinary room/door transmission is applied after the base radius.
 - Every projectile and all sounds/impacts derived from it share a stable shot/incident ID.
 - Each impact event includes impact position, incoming direction, source actor/type, geometry ID/type, destructibility, projectile behavior, and whether the hit destroyed the object.
 - Bullet-triggered destruction must not accidentally dispatch duplicate AI confirmations for the same collision. The projectile impact is the canonical collision incident; a separate structural-destruction sound may remain for presentation only if it is linked to the same incident ID and deduplicated by AI.
@@ -99,7 +100,7 @@ The first-pass normalized values make an unobstructed standard bullet stop in th
 - Feature 14 emits neutral projectile-impact data and sound events; it does not directly choose enemy states.
 - Feature 13 decides whether each enemy heard or witnessed the impact and chooses suspicious investigation versus immediate alert/search.
 - A single enemy processes one shot/impact through one highest-priority reaction path: direct shooter/muzzle observation, witnessed impact, or heard impact.
-- Building-level severity weights and facility-wide escalation remain deferred until these local reactions are implemented and tuned.
+- Building-level severity weights and facility-wide escalation are owned separately by Feature 16 after Feature 15A exposes normalized topology.
 
 ## Compartmentalized Implementation Order
 
@@ -109,10 +110,10 @@ The first-pass normalized values make an unobstructed standard bullet stop in th
 4. Add continued travel through actors and penetrable geometry until resistance exhausts the budget or blocking geometry is reached. **Done; default rounds stop in the first body.**
 5. Add persistent door bullet-hole records and the physical window data/state boundary. **Done for the two exterior window apertures.**
 6. Emit canonical geometry-impact events and independently tuned muzzle/impact sounds with shared shot IDs. **Done; material-specific glass and metal impact radii are implemented.**
-7. Add Feature 13 heard-impact suspicious investigation using the acoustically perceived reachable point. **Next through Feature 13.**
-8. Add Feature 13 witnessed-impact immediate alert and reachable room/connected-space search. **Pending through Feature 13.**
-9. Run map-level tests for collision ordering, one-person maximum with default values, test-tuned two-person penetration, accumulated object resistance, all door orientations, blocking walls, sound attenuation, and heard-versus-witnessed reaction priority. **Partially complete; final reaction-priority coverage waits on steps 7-8.**
-10. Tune only after the complete local loop is stable; then proceed to facility escalation weighting.
+7. Add Feature 13 heard-impact suspicious investigation using the acoustically perceived reachable point. **Done.**
+8. Add Feature 13 witnessed-impact immediate alert and reachable room/connected-space search. **Done.**
+9. Run map-level tests for collision ordering, one-person maximum with default values, test-tuned two-person penetration, accumulated object resistance, all door orientations, blocking walls, sound attenuation, and heard-versus-witnessed reaction priority. **Focused automated coverage is complete; full player-facing map regression and stability work remain.**
+10. Keep facility escalation weighting out of Feature 14. Feature 16 owns it after Feature 15A mission-data separation.
 
 ## Deferred Design Details
 
@@ -128,14 +129,16 @@ The first-pass normalized values make an unobstructed standard bullet stop in th
 
 - Current destructible doors and physical windows allow penetration; normal walls and configured non-destructible doors stop bullets.
 - Door/window behavior comes from explicit material properties rather than geometry type checks.
+- With default firearm tuning, a normal wooden door remains intact through 99 standard bullet hits and is destroyed by the hundredth; this threshold is a stress/debug fallback, while future explosives are the intended normal destruction source.
+- Physical windows still break on the third standard hit, and the reinforced metal door remains non-destructible regardless of projectile damage or penetration power.
 - Bullet holes are visible and persist until reset.
 - With default values, an unobstructed standard bullet damages one unarmored actor and stops in that first actor.
 - A `2.0` penetration upgrade can hit two unarmored actors at most and stops on the second.
 - Door/window resistance accumulates across penetrations, so bullets can cross multiple lightweight objects but cannot cross an unlimited number.
 - Blocking walls and configured non-destructible doors stop bullets regardless of remaining penetration power.
 - Every geometry collision emits one canonical impact event and an impact sound using the separate projectile-impact radius.
-- **Pending Feature 13 integration:** One shot's muzzle and impact sounds share an incident ID and do not accidentally double-confirm the same AI reaction.
-- **Pending Feature 13 integration:** Heard-only impacts produce suspicious investigation; witnessed impacts produce immediate alert and reachable connected-space search.
+- One shot's muzzle and impact sounds share an incident ID and do not accidentally double-confirm the same AI reaction.
+- Heard-only impacts produce suspicious investigation; witnessed impacts produce immediate alert and reachable connected-space search.
 - Existing door interaction, opening, destruction, sound transmission, and light aperture behavior still works.
 - Window destruction and silent close-range opening each activate the linked secondary exit exactly once.
 - Wooden and metal doors animate closed in reverse, metal doors move more slowly, and closing never transfers the closing actor through the doorway.

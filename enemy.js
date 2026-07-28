@@ -47,6 +47,18 @@ const ENEMY_HIT_FLASH_FRAMES = 10;
 const ENEMY_PLAYER_VISIBILITY_SAMPLE_RADIUS = scaleEnemyUnit(18);
 const ENEMY_DOORWAY_ARRIVAL_RADIUS = scaleEnemyUnit(36);
 const ENEMY_DOORWAY_OPEN_RADIUS = ENEMY_RADIUS + ENEMY_DOORWAY_ARRIVAL_RADIUS;
+const ENEMY_EVENT_MEMORY_FRAMES = 900;
+const ENEMY_SHOT_MEMORY_FRAMES = 300;
+const ENEMY_IMPACT_CONFIRMATION_FRAMES = 180;
+const ENEMY_SUSPICION_TEAM_SIZE = 4;
+const ENEMY_COMPANION_ASSIGNMENT_PRIORITY = 350;
+
+const SHOT_REACTION_RANK = Object.freeze({
+  heardImpact: 100,
+  witnessedImpact: 200,
+  heardGunshot: 300,
+  muzzleFlash: 400,
+});
 
 const STANDARD_VISION = Math.PI * 2 / 3; // 120 deg, matches VISION_ANGLE in player.js
 
@@ -90,6 +102,10 @@ function enemyShotSpeed() { return enemyTunedUnit('enemyShotSpeed', 25); }
 function enemyAimSpreadRadians() { return typeof getTuningRadians === 'function' ? getTuningRadians('enemyAimSpreadDegrees', 9) : 0.16; }
 function enemySearchSweepRate() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySearchSweepRate', SEARCH_SWEEP_RATE) : SEARCH_SWEEP_RATE; }
 function enemyCautiousFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyCautiousFrames', CAUTIOUS_FRAMES) : CAUTIOUS_FRAMES; }
+function enemyEventMemoryFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyEventMemoryFrames', ENEMY_EVENT_MEMORY_FRAMES) : ENEMY_EVENT_MEMORY_FRAMES; }
+function enemyShotMemoryFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyShotMemoryFrames', ENEMY_SHOT_MEMORY_FRAMES) : ENEMY_SHOT_MEMORY_FRAMES; }
+function enemyImpactConfirmationFrames() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemyImpactConfirmationFrames', ENEMY_IMPACT_CONFIRMATION_FRAMES) : ENEMY_IMPACT_CONFIRMATION_FRAMES; }
+function enemySuspicionTeamSize() { return typeof getTuningNumber === 'function' ? getTuningNumber('enemySuspicionTeamSize', ENEMY_SUSPICION_TEAM_SIZE) : ENEMY_SUSPICION_TEAM_SIZE; }
 function showEnemySightDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugEnemySight') : true; }
 function showEnemyLabelsDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugEnemyLabels') : true; }
 function showHiddenEnemiesDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugHiddenEnemies') : false; }
@@ -494,6 +510,9 @@ const INITIAL_ENEMIES = [
 let enemies      = [];
 let enemyProjectiles = [];
 let playerHitFlashTimer = 0;
+let enemyIncidentFrame = 0;
+let nextEnemyIncidentId = 1;
+const suspicionCases = new Map();
 
 function applyEnemyTuning(e) {
   if (!e) return;
@@ -528,11 +547,17 @@ function resetEnemies() {
     pendingReaction:    null, // { state, targetAngle, sourceX, sourceY }
     alertEpisode:       0,
     alertReason:        null,
+    currentIncident:    null,
+    companionAssignment: null,
     playerVisibleThisFrame: false,
     observedCorpses:    new Set(),
     observedDoorEvidence: new Map(),
     observedBrokenLamps: new Set(),
+    observedBrokenWindows: new Set(),
     observedAlertEpisodes: new Set(),
+    observedIncidentIds: new Map(),
+    shotReactions:      new Map(),
+    recentBallisticImpacts: new Map(),
     suspicionLevel:     0,    // how many times enemy has entered suspicious from patrol
     suspicionPhase:     'turning', // 'turning'|'moving'|'searching'|'returning'
     suspicionSourceX:   0,    // world position of the suspicious stimulus
@@ -545,6 +570,9 @@ function resetEnemies() {
     suspicionReturnPatrolIndex: 0,
     suspicionReturnPauseTimer: 0,
     suspicionReturnSweepAccum: 0,
+    suspicionCaseId:    null,
+    suspicionCaseSlot:  null,
+    suspicionRole:      null,
     doorInvestigation: null,
     damagedDoorInvestigation: null,
     alertDoorTransit:  null,
@@ -573,6 +601,9 @@ function resetEnemies() {
   if (typeof resetSoundSystem === 'function') resetSoundSystem();
   enemyProjectiles.length = 0;
   playerHitFlashTimer = 0;
+  enemyIncidentFrame = 0;
+  nextEnemyIncidentId = 1;
+  suspicionCases.clear();
 }
 
 function damageEnemy(e, amount) {
@@ -594,58 +625,538 @@ function damageEnemy(e, amount) {
   return e.health <= 0;
 }
 
-// Queue a delayed state change. Does nothing if already reacting (existing pending wins).
-function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = enemyReactionDelay(), reason = 'sound') {
-  if (e.reactionTimer > 0) return;
-  e.reactionTimer   = delayFrames;
-  e.pendingReaction = { state: toState, targetAngle, sourceX, sourceY, reason };
-}
-
 function enemyAlertReasonPriority(reason) {
   switch (reason) {
     case 'player':        return 500;
+    case 'gunshot':       return 450;
     case 'corpse':        return 400;
-    case 'door-impact':   return 300;
+    case 'alerted-enemy': return ENEMY_COMPANION_ASSIGNMENT_PRIORITY;
+    case 'impact':
+    case 'door-impact':
     case 'lamp-impact':   return 300;
-    case 'gunshot':       return 275;
-    case 'door':          return 250;
-    case 'alerted-enemy': return 200;
+    case 'door':
+    case 'damaged-door':
+    case 'broken-lamp':
+    case 'broken-window': return 250;
+    case 'impact-heard':  return 150;
     case 'sound':         return 100;
     default:              return 0;
   }
 }
 
-function enterEnemyAlert(e, targetX, targetY, confirmedPlayer = false, reason = 'sound') {
+function createEnemyIncident(reason, x, y, options = {}) {
+  const shotId = options.shotId ?? null;
+  return {
+    id: options.id ?? (shotId !== null ? `shot:${shotId}` : `incident:${nextEnemyIncidentId++}`),
+    reason,
+    priority: options.priority ?? enemyAlertReasonPriority(reason),
+    x,
+    y,
+    frame: options.frame ?? enemyIncidentFrame,
+    shotId,
+    sourceType: options.sourceType ?? 'unknown',
+    confirmedPlayer: options.confirmedPlayer === true,
+    routeRank: options.routeRank ?? 0,
+    informationQuality: options.informationQuality ?? 0,
+    localization: options.localization ?? null,
+    geometryId: options.geometryId ?? null,
+    geometryType: options.geometryType ?? null,
+    destroyed: options.destroyed === true,
+    caseId: options.caseId ?? null,
+  };
+}
+
+function createShotIncident(shotId, reason, x, y, options = {}) {
+  return createEnemyIncident(reason, x, y, { ...options, shotId });
+}
+
+function pruneEnemyEventMemory(e) {
+  const eventCutoff = enemyIncidentFrame - enemyEventMemoryFrames();
+  for (const [eventId, memory] of e.observedIncidentIds) {
+    const frame = typeof memory === 'number' ? memory : (memory.memoryFrame ?? memory.frame);
+    if (frame < eventCutoff) e.observedIncidentIds.delete(eventId);
+  }
+  const shotCutoff = enemyIncidentFrame - enemyShotMemoryFrames();
+  for (const [shotId, reaction] of e.shotReactions) {
+    if (reaction.frame < shotCutoff) e.shotReactions.delete(shotId);
+  }
+  const impactCutoff = enemyIncidentFrame - enemyImpactConfirmationFrames();
+  for (const [shotId, frame] of e.recentBallisticImpacts) {
+    if (frame < impactCutoff) e.recentBallisticImpacts.delete(shotId);
+  }
+  while (e.observedIncidentIds.size > 64) {
+    e.observedIncidentIds.delete(e.observedIncidentIds.keys().next().value);
+  }
+  while (e.shotReactions.size > 64) {
+    e.shotReactions.delete(e.shotReactions.keys().next().value);
+  }
+  while (e.recentBallisticImpacts.size > 64) {
+    e.recentBallisticImpacts.delete(e.recentBallisticImpacts.keys().next().value);
+  }
+}
+
+function recordEnemyShotReaction(e, shotId, rank, kind, informationQuality = 0) {
+  if (shotId === null || shotId === undefined) return 'new';
+  pruneEnemyEventMemory(e);
+  const previous = e.shotReactions.get(shotId);
+  if (previous) {
+    if (previous.rank > rank) return false;
+    if (previous.rank === rank && (previous.informationQuality ?? 0) >= informationQuality) return false;
+  }
+  const result = previous && previous.rank === rank ? 'refinement' : (previous ? 'upgrade' : 'new');
+  e.shotReactions.set(shotId, { rank, kind, informationQuality, frame: enemyIncidentFrame });
+  return result;
+}
+
+function getEnemyCurrentIncidentPriority(e) {
+  return e.currentIncident?.priority ?? enemyAlertReasonPriority(e.alertReason);
+}
+
+function compareIncidentInformation(incoming, known) {
+  if (!incoming) return -1;
+  if (!known) return 1;
+  const incomingPriority = incoming.priority ?? enemyAlertReasonPriority(incoming.reason);
+  const knownPriority = known.priority ?? enemyAlertReasonPriority(known.reason);
+  if (incomingPriority !== knownPriority) return incomingPriority - knownPriority;
+  const incomingRoute = incoming.routeRank ?? 0;
+  const knownRoute = known.routeRank ?? 0;
+  if (incomingRoute !== knownRoute) return incomingRoute - knownRoute;
+  return (incoming.informationQuality ?? 0) - (known.informationQuality ?? 0);
+}
+
+function getRememberedEnemyIncident(e, incidentId) {
+  const memory = e.observedIncidentIds.get(incidentId);
+  if (!memory || typeof memory === 'number') return memory ? { frame: memory } : null;
+  return memory;
+}
+
+function enemyAlreadyKnowsIncident(e, incident) {
+  if (!incident?.id) return false;
+  const known = getRememberedEnemyIncident(e, incident.id);
+  return !!known && compareIncidentInformation(incident, known) <= 0;
+}
+
+function rememberEnemyIncident(e, incident) {
+  if (!incident?.id) return false;
+  const known = getRememberedEnemyIncident(e, incident.id);
+  if (known && compareIncidentInformation(incident, known) <= 0) return false;
+  e.observedIncidentIds.set(incident.id, {
+    ...incident,
+    memoryFrame: enemyIncidentFrame,
+  });
+  while (e.observedIncidentIds.size > 64) {
+    e.observedIncidentIds.delete(e.observedIncidentIds.keys().next().value);
+  }
+  return true;
+}
+
+function getImpactProminence(details = {}) {
+  if (details.destroyed === true || details.impactKind === 'destruction') return 4;
+  if (details.geometryType === 'window') return 3;
+  if (details.geometryType === 'door' && details.material === 'metal') return 2;
+  if (details.geometryType === 'door') return 1.5;
+  return 1;
+}
+
+function getPerceptionInformationQuality(localization, prominence = 1, distance = Infinity, audibility = 0) {
+  const localizationRank = {
+    muffled: 1,
+    vague: 2,
+    clear: 3,
+    exact: 4,
+  }[localization] ?? 0;
+  const boundedAudibility = Math.max(0, Math.min(1, Number.isFinite(audibility) ? audibility : 0));
+  const boundedDistance = Number.isFinite(distance) ? Math.min(9999, Math.max(0, distance)) : 9999;
+  return localizationRank * 1_000_000 + prominence * 10_000 + boundedAudibility * 1_000 - boundedDistance * 0.01;
+}
+
+function getSoundInformationQuality(sound, path) {
+  const audibility = path?.effectiveRadius > 0
+    ? 1 - Math.min(1, path.distance / path.effectiveRadius)
+    : 0;
+  return getPerceptionInformationQuality(
+    path?.localization ?? 'muffled',
+    sound?.isProjectileImpact ? getImpactProminence(sound) : 1,
+    path?.distance,
+    audibility
+  );
+}
+
+function getWitnessInformationQuality(e, details) {
+  return getPerceptionInformationQuality(
+    'exact',
+    getImpactProminence(details),
+    Math.hypot(details.x - e.x, details.y - e.y),
+    1
+  );
+}
+
+function recordBallisticImpactConfirmation(e, shotId) {
+  if (shotId === null || shotId === undefined) return false;
+  const cutoff = enemyIncidentFrame - enemyImpactConfirmationFrames();
+  for (const [knownShotId, frame] of e.recentBallisticImpacts) {
+    if (frame < cutoff) e.recentBallisticImpacts.delete(knownShotId);
+  }
+  if (e.recentBallisticImpacts.has(shotId)) return false;
+  e.recentBallisticImpacts.set(shotId, enemyIncidentFrame);
+  return e.recentBallisticImpacts.size >= 2;
+}
+
+function pruneSuspicionCases() {
+  const cutoff = enemyIncidentFrame - enemyEventMemoryFrames();
+  for (const [caseId, searchCase] of suspicionCases) {
+    if (searchCase.lastFrame < cutoff) suspicionCases.delete(caseId);
+  }
+  while (suspicionCases.size > 64) {
+    suspicionCases.delete(suspicionCases.keys().next().value);
+  }
+}
+
+function reserveSuspicionCaseMember(e, incident, fromCompanion = false) {
+  if (!incident?.id) return { accepted: !fromCompanion, caseId: null, slot: null, role: 'support' };
+  pruneSuspicionCases();
+  const caseId = incident.caseId ?? incident.id;
+  incident.caseId = caseId;
+  let searchCase = suspicionCases.get(caseId);
+  if (!searchCase) {
+    searchCase = {
+      id: caseId,
+      createdFrame: incident.frame ?? enemyIncidentFrame,
+      lastFrame: enemyIncidentFrame,
+      members: new Map(),
+      escalated: false,
+    };
+    suspicionCases.set(caseId, searchCase);
+  }
+  searchCase.lastFrame = enemyIncidentFrame;
+
+  if (searchCase.members.has(e.index)) {
+    return {
+      accepted: true,
+      caseId,
+      slot: searchCase.members.get(e.index),
+      role: 'investigator',
+    };
+  }
+
+  const teamSize = Math.max(1, Math.round(enemySuspicionTeamSize()));
+  if (searchCase.members.size >= teamSize) {
+    return {
+      accepted: !fromCompanion,
+      caseId,
+      slot: null,
+      role: 'support',
+    };
+  }
+
+  const usedSlots = new Set(searchCase.members.values());
+  let slot = 0;
+  while (usedSlots.has(slot)) slot++;
+  searchCase.members.set(e.index, slot);
+  return { accepted: true, caseId, slot, role: 'investigator' };
+}
+
+function getSuspicionCaseSearchPoint(e, incident, slot) {
+  if (!incident || slot === null || slot === undefined || slot <= 0) {
+    return { x: incident?.x ?? e.x, y: incident?.y ?? e.y };
+  }
+
+  const radius = scaleEnemyUnit(slot === 3 ? 52 : 40);
+  const baseAngle = (slot - 1) * (Math.PI * 2 / 3);
+  const candidates = [];
+  for (let offset = 0; offset < 6; offset++) {
+    const angle = baseAngle + offset * (Math.PI / 3);
+    candidates.push({
+      x: incident.x + Math.cos(angle) * radius,
+      y: incident.y + Math.sin(angle) * radius,
+    });
+  }
+  return candidates.find(point => !_pointHitsExpandedWall(point.x, point.y, enemyRadius() * 0.75))
+    ?? { x: incident.x, y: incident.y };
+}
+
+function markSuspicionCaseEscalated(e) {
+  const caseId = e.suspicionCaseId ?? e.currentIncident?.caseId;
+  if (!caseId) return;
+  const searchCase = suspicionCases.get(caseId);
+  if (searchCase) {
+    searchCase.escalated = true;
+    searchCase.lastFrame = enemyIncidentFrame;
+  }
+}
+
+function refineEnemyIncident(e, incident, reason = incident?.reason) {
+  if (!incident?.id) return false;
+  const current = e.currentIncident;
+  const pendingIncident = e.pendingReaction?.incident;
+  const known = current?.id === incident.id
+    ? current
+    : (pendingIncident?.id === incident.id ? pendingIncident : getRememberedEnemyIncident(e, incident.id));
+  if (known && compareIncidentInformation(incident, known) <= 0) return false;
+
+  rememberEnemyIncident(e, incident);
+  if (e.reactionTimer > 0 && e.pendingReaction) {
+    const pending = e.pendingReaction;
+    pending.incident = { ...incident };
+    pending.reason = reason;
+    if (pending.state === 'suspicious') {
+      const assignment = reserveSuspicionCaseMember(e, pending.incident, false);
+      const target = getSuspicionCaseSearchPoint(e, pending.incident, assignment.slot);
+      pending.sourceX = target.x;
+      pending.sourceY = target.y;
+      pending.targetAngle = Math.atan2(target.x - e.x, -(target.y - e.y));
+      pending.suspicionCaseId = assignment.caseId;
+      pending.suspicionCaseSlot = assignment.slot;
+      pending.suspicionRole = assignment.role;
+      pending.forceInvestigation = assignment.role === 'investigator';
+    } else {
+      pending.sourceX = incident.x;
+      pending.sourceY = incident.y;
+      pending.targetAngle = Math.atan2(incident.x - e.x, -(incident.y - e.y));
+    }
+    return true;
+  }
+
+  if (e.state === 'suspicious') {
+    const assignment = reserveSuspicionCaseMember(e, incident, false);
+    const target = getSuspicionCaseSearchPoint(e, incident, assignment.slot);
+    e.currentIncident = { ...incident };
+    e.suspicionReason = reason;
+    e.suspicionCaseId = assignment.caseId;
+    e.suspicionCaseSlot = assignment.slot;
+    e.suspicionRole = assignment.role;
+    e.suspicionSourceX = target.x;
+    e.suspicionSourceY = target.y;
+    e.targetAngle = Math.atan2(target.x - e.x, -(target.y - e.y));
+    if (assignment.role === 'investigator') {
+      e.suspicionPhase = 'moving';
+      e.suspicionSearchAccum = 0;
+      e.searchPath = buildPath(e.x, e.y, target.x, target.y);
+      e.searchPathIndex = 0;
+    }
+    return true;
+  }
+
+  if (e.state === 'alert') {
+    const previousPriority = getEnemyCurrentIncidentPriority(e);
+    const incomingPriority = incident.priority ?? enemyAlertReasonPriority(reason);
+    e.currentIncident = { ...incident };
+    e.alertReason = reason;
+    e.lastKnownX = incident.x;
+    e.lastKnownY = incident.y;
+    e.targetAngle = Math.atan2(incident.x - e.x, -(incident.y - e.y));
+    if (incomingPriority > previousPriority) {
+      e.doorInvestigation = null;
+      e.damagedDoorInvestigation = null;
+      e.alertDoorTransit = null;
+      e.companionAssignment = null;
+    }
+    e.searchPath = buildPath(e.x, e.y, incident.x, incident.y);
+    e.searchPathIndex = 0;
+    return true;
+  }
+
+  return false;
+}
+
+// Queue a delayed state change. Does nothing if already reacting (existing pending wins).
+function scheduleReaction(e, toState, targetAngle, sourceX = e.x, sourceY = e.y, delayFrames = enemyReactionDelay(), reason = 'sound', incident = null, options = {}) {
+  const reactionIncident = incident ?? createEnemyIncident(reason, sourceX, sourceY);
+  if (e.reactionTimer > 0) {
+    const pendingPriority = e.pendingReaction?.incident?.priority ?? enemyAlertReasonPriority(e.pendingReaction?.reason);
+    const isIndependentConfirmation = options.independentConfirmation === true &&
+      reactionIncident.id !== e.pendingReaction?.incident?.id;
+    if (reactionIncident.priority <= pendingPriority && !isIndependentConfirmation) return false;
+    delayFrames = Math.min(e.reactionTimer, delayFrames);
+  }
+
+  let suspicionAssignment = null;
+  if (toState === 'suspicious') {
+    suspicionAssignment = reserveSuspicionCaseMember(e, reactionIncident, options.fromCompanionSuspicion === true);
+    if (!suspicionAssignment.accepted) return false;
+    const target = getSuspicionCaseSearchPoint(e, reactionIncident, suspicionAssignment.slot);
+    sourceX = target.x;
+    sourceY = target.y;
+    targetAngle = Math.atan2(sourceX - e.x, -(sourceY - e.y));
+  }
+
+  e.reactionTimer   = delayFrames;
+  e.pendingReaction = {
+    state: toState,
+    targetAngle,
+    sourceX,
+    sourceY,
+    reason,
+    incident: reactionIncident,
+    suspicionCaseId: suspicionAssignment?.caseId ?? null,
+    suspicionCaseSlot: suspicionAssignment?.slot ?? null,
+    suspicionRole: suspicionAssignment?.role ?? null,
+  };
+  return true;
+}
+
+function enterEnemyAlert(e, targetX, targetY, confirmedPlayer = false, reason = 'sound', incident = null, options = {}) {
   const wasAlert = e.state === 'alert';
-  const replacesAlertSource = !wasAlert ||
-    enemyAlertReasonPriority(reason) >= enemyAlertReasonPriority(e.alertReason);
-  e.reactionTimer = 0;
-  e.pendingReaction = null;
-  e.doorInvestigation = null;
-  e.damagedDoorInvestigation = null;
-  e.alertDoorTransit = null;
-  e.suspicionReason = null;
+  let incomingIncident = incident;
+  if (!incomingIncident && reason === 'player' && e.currentIncident?.reason === 'player') {
+    incomingIncident = {
+      ...e.currentIncident,
+      x: targetX,
+      y: targetY,
+      confirmedPlayer: confirmedPlayer || e.currentIncident.confirmedPlayer,
+    };
+  }
+  if (!incomingIncident) {
+    incomingIncident = createEnemyIncident(reason, targetX, targetY, { confirmedPlayer });
+  }
+  const incomingPriority = incomingIncident.priority ?? enemyAlertReasonPriority(reason);
+  const currentPriority = e.companionAssignment && incomingIncident.id !== e.companionAssignment.incidentId
+    ? ENEMY_COMPANION_ASSIGNMENT_PRIORITY
+    : getEnemyCurrentIncidentPriority(e);
+  const replacesAlertSource = options.forceReplace === true || !wasAlert || incomingPriority >= currentPriority;
+  markSuspicionCaseEscalated(e);
   e.state = 'alert';
   e.alertTimer = enemyAlertFrames();
   if (replacesAlertSource) {
+    e.reactionTimer = 0;
+    e.pendingReaction = null;
+    e.doorInvestigation = null;
+    e.damagedDoorInvestigation = null;
+    e.alertDoorTransit = null;
+    e.suspicionReason = null;
     e.lastKnownX = targetX;
     e.lastKnownY = targetY;
     e.alertReason = reason;
+    e.currentIncident = { ...incomingIncident, x: targetX, y: targetY };
+    rememberEnemyIncident(e, e.currentIncident);
     e.targetAngle = Math.atan2(targetX - e.x, -(targetY - e.y));
     e.playerVisibleThisFrame = confirmedPlayer;
+    if (options.fromCompanion === true) {
+      e.companionAssignment = {
+        incidentId: incomingIncident.id,
+        sourceEnemyIndex: options.sourceEnemyIndex ?? null,
+        x: targetX,
+        y: targetY,
+      };
+    } else {
+      e.companionAssignment = null;
+    }
   }
   if (!wasAlert) e.alertEpisode++;
   return replacesAlertSource;
 }
 
-function scheduleMuffledDoorInvestigation(e, doorId, sourceX, sourceY) {
+function acceptCompanionIncident(e, sourceEnemy, incident) {
+  if (!incident?.id) return false;
+  const alreadyKnows = enemyAlreadyKnowsIncident(e, incident);
+  if (e.state === 'alert' && alreadyKnows) return false;
+
+  if (e.state === 'alert' && e.currentIncident?.id === incident.id) {
+    if (incident.shotId !== null && incident.shotId !== undefined && incident.routeRank) {
+      recordEnemyShotReaction(e, incident.shotId, incident.routeRank, 'companion-update', incident.informationQuality);
+    }
+    return refineEnemyIncident(e, incident, incident.reason);
+  }
+
+  const currentPriority = getEnemyCurrentIncidentPriority(e);
+  if (e.state === 'alert' && e.currentIncident &&
+      compareIncidentInformation(incident, e.currentIncident) <= 0) {
+    rememberEnemyIncident(e, incident);
+    return false;
+  }
+  if (e.currentIncident && currentPriority > incident.priority) {
+    rememberEnemyIncident(e, incident);
+    if (e.state !== 'alert') {
+      enterEnemyAlert(
+        e,
+        e.currentIncident.x,
+        e.currentIncident.y,
+        e.currentIncident.confirmedPlayer === true,
+        e.currentIncident.reason,
+        e.currentIncident,
+        { forceReplace: true }
+      );
+    }
+    return false;
+  }
+  rememberEnemyIncident(e, incident);
+  if (incident.shotId !== null && incident.shotId !== undefined && incident.routeRank) {
+    recordEnemyShotReaction(e, incident.shotId, incident.routeRank, 'companion-alert', incident.informationQuality);
+  }
+  return enterEnemyAlert(
+    e,
+    incident.x,
+    incident.y,
+    false,
+    incident.reason,
+    { ...incident },
+    { fromCompanion: true, sourceEnemyIndex: sourceEnemy?.index ?? null, forceReplace: true }
+  );
+}
+
+function suspicionCaseCanRecruit(e, caseId) {
+  const searchCase = suspicionCases.get(caseId);
+  if (!searchCase || searchCase.escalated) return false;
+  if (e.suspicionCaseId === caseId || searchCase.members.has(e.index)) return true;
+  return searchCase.members.size < Math.max(1, Math.round(enemySuspicionTeamSize()));
+}
+
+function acceptSuspiciousCompanionIncident(e, sourceEnemy, incident) {
+  if (!incident?.id || e.state === 'alert') return false;
+  const caseId = incident.caseId ?? sourceEnemy?.suspicionCaseId ?? incident.id;
+  const sharedIncident = { ...incident, caseId };
+  const alreadyKnows = enemyAlreadyKnowsIncident(e, sharedIncident);
+
+  if (e.state === 'suspicious' && e.suspicionCaseId === caseId) {
+    if (alreadyKnows) return false;
+    if (sharedIncident.shotId !== null && sharedIncident.shotId !== undefined && sharedIncident.routeRank) {
+      recordEnemyShotReaction(
+        e,
+        sharedIncident.shotId,
+        sharedIncident.routeRank,
+        'companion-suspicion-update',
+        sharedIncident.informationQuality
+      );
+    }
+    return refineEnemyIncident(e, sharedIncident, sharedIncident.reason);
+  }
+
+  if (alreadyKnows || !suspicionCaseCanRecruit(e, caseId)) return false;
+  const angle = Math.atan2(sharedIncident.x - e.x, -(sharedIncident.y - e.y));
+  const scheduled = scheduleReaction(
+    e,
+    'suspicious',
+    angle,
+    sharedIncident.x,
+    sharedIncident.y,
+    enemyReactionDelay(),
+    sharedIncident.reason,
+    sharedIncident,
+    { fromCompanionSuspicion: true }
+  );
+  if (!scheduled || !e.pendingReaction) return false;
+  if (sharedIncident.shotId !== null && sharedIncident.shotId !== undefined && sharedIncident.routeRank) {
+    recordEnemyShotReaction(
+      e,
+      sharedIncident.shotId,
+      sharedIncident.routeRank,
+      'companion-suspicion',
+      sharedIncident.informationQuality
+    );
+  }
+  e.pendingReaction.forceInvestigation = e.pendingReaction.suspicionRole === 'investigator';
+  e.pendingReaction.fromCompanionSuspicion = true;
+  return true;
+}
+
+function scheduleMuffledDoorInvestigation(e, doorId, sourceX, sourceY, reason = 'sound', incident = null) {
   if (e.state !== 'patrol' || e.reactionTimer > 0) return false;
   const door = _getDoorById(doorId);
   if (!door || door.state !== 'closed') return false;
   const doorX = door.x + door.w / 2;
   const doorY = door.y + door.h / 2;
   const angle = Math.atan2(doorX - e.x, -(doorY - e.y));
-  scheduleReaction(e, 'suspicious', angle, doorX, doorY);
+  scheduleReaction(e, 'suspicious', angle, doorX, doorY, enemyReactionDelay(), reason, incident);
   if (!e.pendingReaction) return false;
   e.pendingReaction.doorInvestigation = { doorId, sourceX, sourceY };
   return true;
@@ -658,7 +1169,13 @@ function scheduleDamagedDoorInvestigation(e, doorId) {
   const doorX = door.x + door.w / 2;
   const doorY = door.y + door.h / 2;
   const angle = Math.atan2(doorX - e.x, -(doorY - e.y));
-  scheduleReaction(e, 'suspicious', angle, doorX, doorY, enemyReactionDelay(), 'damaged-door');
+  const incident = createEnemyIncident('damaged-door', doorX, doorY, {
+    id: `door-damaged:${door.id}:${Math.round(door.hp)}`,
+    caseId: e.state === 'suspicious' ? e.suspicionCaseId : null,
+    geometryId: door.id,
+    geometryType: 'door',
+  });
+  scheduleReaction(e, 'suspicious', angle, doorX, doorY, enemyReactionDelay(), 'damaged-door', incident);
   if (!e.pendingReaction) return false;
   e.pendingReaction.damagedDoorInvestigation = { doorId };
   return true;
@@ -666,24 +1183,187 @@ function scheduleDamagedDoorInvestigation(e, doorId) {
 
 // Apply sound-triggered state transitions for one enemy.
 // Used by both emitSound (gunshots/footsteps) and notifyPlayerMoved.
-function applySoundReaction(e, sourceX, sourceY, reason = 'sound') {
+function applySoundReaction(e, sourceX, sourceY, reason = 'sound', incident = null) {
+  const reactionIncident = incident ?? createEnemyIncident(reason, sourceX, sourceY);
+  if (e.companionAssignment && enemyAlertReasonPriority(reason) <= ENEMY_COMPANION_ASSIGNMENT_PRIORITY) {
+    if (e.state === 'alert') e.alertTimer = enemyAlertFrames();
+    return false;
+  }
   const angle = Math.atan2(sourceX - e.x, -(sourceY - e.y));
+  if (reactionIncident.sameShotRefinement === true &&
+      (e.currentIncident?.id === reactionIncident.id || e.pendingReaction?.incident?.id === reactionIncident.id)) {
+    return refineEnemyIncident(e, reactionIncident, reason);
+  }
+  if (reason === 'gunshot' && e.reactionTimer > 0 &&
+      e.pendingReaction?.state === 'suspicious' && e.pendingReaction?.reason === 'gunshot' &&
+      e.pendingReaction?.incident?.id !== reactionIncident.id) {
+    return scheduleReaction(
+      e,
+      'alert',
+      angle,
+      sourceX,
+      sourceY,
+      enemySuspicionConfirmDelay(),
+      reason,
+      reactionIncident,
+      { independentConfirmation: true }
+    );
+  }
   if (e.state === 'patrol') {
-    scheduleReaction(e, 'suspicious', angle, sourceX, sourceY, enemyReactionDelay(), reason);
+    scheduleReaction(e, 'suspicious', angle, sourceX, sourceY, enemyReactionDelay(), reason, reactionIncident);
   } else if (e.state === 'suspicious') {
     // Second sound while suspicious ??confirmed alert after a short lock-on delay.
     e.targetAngle = angle;
-    scheduleReaction(e, 'alert', angle, sourceX, sourceY, enemySuspicionConfirmDelay(), reason);
+    scheduleReaction(e, 'alert', angle, sourceX, sourceY, enemySuspicionConfirmDelay(), reason, reactionIncident);
   } else if (e.state === 'searching' || e.state === 'returning' || (e.state === 'patrol' && e.cautiousTimer > 0)) {
     // Already on edge ??any sound snaps straight to alert, skipping suspicion delay
-    enterEnemyAlert(e, sourceX, sourceY, false, reason);
+    enterEnemyAlert(e, sourceX, sourceY, false, reason, reactionIncident);
   } else if (e.state === 'alert') {
     if (enemyAlertReasonPriority(reason) >= enemyAlertReasonPriority(e.alertReason)) {
-      enterEnemyAlert(e, sourceX, sourceY, false, reason);
+      enterEnemyAlert(e, sourceX, sourceY, false, reason, reactionIncident);
     } else {
       e.alertTimer = enemyAlertFrames();
     }
   }
+  return true;
+}
+
+function scheduleHeardImpactInvestigation(e, sourceX, sourceY, incident) {
+  if (e.companionAssignment || e.state === 'alert' || e.doorInvestigation || e.damagedDoorInvestigation) {
+    if (e.state === 'alert') e.alertTimer = enemyAlertFrames();
+    return false;
+  }
+
+  if (e.state === 'suspicious' && e.suspicionCaseId && !incident.caseId) {
+    incident.caseId = e.suspicionCaseId;
+  }
+  const angle = Math.atan2(sourceX - e.x, -(sourceY - e.y));
+  if (e.reactionTimer > 0 && e.pendingReaction?.state === 'suspicious') {
+    const pendingPriority = e.pendingReaction.incident?.priority ?? enemyAlertReasonPriority(e.pendingReaction.reason);
+    if (incident.priority < pendingPriority) return false;
+    e.pendingReaction = {
+      ...e.pendingReaction,
+      targetAngle: angle,
+      sourceX,
+      sourceY,
+      reason: 'impact-heard',
+      incident,
+      forceInvestigation: true,
+      doorInvestigation: null,
+      damagedDoorInvestigation: null,
+    };
+    return true;
+  }
+
+  if (e.state !== 'suspicious') {
+    scheduleReaction(e, 'suspicious', angle, sourceX, sourceY, enemyReactionDelay(), 'impact-heard', incident);
+    if (!e.pendingReaction) return false;
+    e.pendingReaction.forceInvestigation = true;
+    return true;
+  }
+
+  e.reactionTimer = 0;
+  e.pendingReaction = null;
+  e.currentIncident = { ...incident };
+  rememberEnemyIncident(e, incident);
+  e.suspicionReason = 'impact-heard';
+  e.suspicionTimer = 0;
+  e.suspicionSourceX = sourceX;
+  e.suspicionSourceY = sourceY;
+  if (e.suspicionPhase === 'turning') {
+    e.suspicionReturnX = e.x;
+    e.suspicionReturnY = e.y;
+  }
+  e.suspicionPhase = 'moving';
+  e.suspicionSearchAccum = 0;
+  e.searchPath = buildPath(e.x, e.y, sourceX, sourceY);
+  e.searchPathIndex = 0;
+  return true;
+}
+
+function handleProjectileImpactReaction(e, sound, path) {
+  if (!path?.heard) return false;
+  const informationQuality = getSoundInformationQuality(sound, path);
+  const shotDecision = recordEnemyShotReaction(
+    e,
+    sound.shotId,
+    SHOT_REACTION_RANK.heardImpact,
+    sound.destroyed ? 'heard-destruction' : 'heard-impact',
+    informationQuality
+  );
+  if (!shotDecision) return false;
+  const reactionPoint = typeof getEnemyImpactReactionPoint === 'function'
+    ? getEnemyImpactReactionPoint(e, sound, path)
+    : getEnemySoundReactionPoint(path);
+  const incident = createShotIncident(sound.shotId, 'impact-heard', reactionPoint.x, reactionPoint.y, {
+    sourceType: sound.sourceType,
+    routeRank: SHOT_REACTION_RANK.heardImpact,
+    informationQuality,
+    localization: path.localization,
+    geometryId: sound.geometryId,
+    geometryType: sound.geometryType,
+    destroyed: sound.destroyed === true,
+  });
+  incident.sameShotRefinement = shotDecision === 'refinement';
+  if (recordBallisticImpactConfirmation(e, sound.shotId) && e.state !== 'alert') {
+    const angle = Math.atan2(reactionPoint.x - e.x, -(reactionPoint.y - e.y));
+    return scheduleReaction(
+      e,
+      'alert',
+      angle,
+      reactionPoint.x,
+      reactionPoint.y,
+      enemySuspicionConfirmDelay(),
+      'impact-heard',
+      incident,
+      { independentConfirmation: true }
+    );
+  }
+  return scheduleHeardImpactInvestigation(e, reactionPoint.x, reactionPoint.y, incident);
+}
+
+function processMuzzleFlashStimuli(e) {
+  if (typeof getMuzzleFlashEvents !== 'function') return false;
+  let handled = false;
+  for (const flash of getMuzzleFlashEvents()) {
+    if (flash.sourceActor === e || flash.life <= 0) continue;
+    const dx = flash.x - e.x;
+    const dy = flash.y - e.y;
+    if (dx * dx + dy * dy > flash.radius * flash.radius) continue;
+    if (!enemyCanSeeWorldPoint(e, flash.x, flash.y, false)) continue;
+    const informationQuality = getPerceptionInformationQuality(
+      'exact',
+      1,
+      Math.hypot(dx, dy),
+      1
+    );
+    if (!recordEnemyShotReaction(
+      e,
+      flash.shotId,
+      SHOT_REACTION_RANK.muzzleFlash,
+      'muzzle-flash',
+      informationQuality
+    )) continue;
+
+    if (flash.sourceType === 'player') {
+      const incident = createShotIncident(flash.shotId, 'player', flash.x, flash.y, {
+        sourceType: 'player',
+        confirmedPlayer: true,
+        routeRank: SHOT_REACTION_RANK.muzzleFlash,
+        informationQuality,
+        localization: 'exact',
+      });
+      enterEnemyAlert(e, flash.x, flash.y, true, 'player', incident, { forceReplace: true });
+      handled = true;
+      continue;
+    }
+
+    if (flash.sourceType === 'enemy' && flash.sourceActor?.currentIncident) {
+      acceptCompanionIncident(e, flash.sourceActor, flash.sourceActor.currentIncident);
+      handled = true;
+    }
+  }
+  return handled;
 }
 
 // Parameterized cone angle check ??not player-coupled
@@ -739,7 +1419,7 @@ function enemyCanSeeDoor(e, door) {
     { x: door.x + door.w / 2, y: door.y },
     { x: door.x + door.w / 2, y: door.y + door.h },
   ];
-  return samples.some(sample => enemyCanSeeWorldPoint(e, sample.x, sample.y, false));
+  return samples.some(sample => enemyCanSeeWorldPoint(e, sample.x, sample.y));
 }
 
 function detectVisibleCorpseStimulus(e) {
@@ -762,6 +1442,32 @@ function applyVisibleCorpseOverride(e) {
   return true;
 }
 
+function detectVisibleCompanionIncident(e) {
+  for (const other of enemies) {
+    if (other === e || other.alive === false || other.state !== 'alert' || !other.currentIncident) continue;
+    if (e.state === 'alert' && enemyAlreadyKnowsIncident(e, other.currentIncident)) continue;
+    if (!enemyCanSeeWorldPoint(e, other.x, other.y)) continue;
+    return { sourceEnemy: other, incident: { ...other.currentIncident } };
+  }
+  return null;
+}
+
+function detectVisibleSuspiciousCompanionIncident(e) {
+  if (e.state === 'alert') return null;
+  for (const other of enemies) {
+    if (other === e || other.alive === false || other.state !== 'suspicious' || !other.currentIncident) continue;
+    const caseId = other.suspicionCaseId ?? other.currentIncident.caseId ?? other.currentIncident.id;
+    const searchCase = suspicionCases.get(caseId);
+    if (!searchCase || searchCase.escalated) continue;
+    const incident = { ...other.currentIncident, caseId };
+    if (enemyAlreadyKnowsIncident(e, incident)) continue;
+    if (!suspicionCaseCanRecruit(e, caseId)) continue;
+    if (!enemyCanSeeWorldPoint(e, other.x, other.y)) continue;
+    return { sourceEnemy: other, incident };
+  }
+  return null;
+}
+
 function getLampEvidenceId(lamp) {
   return lamp?.projectileTargetId ?? null;
 }
@@ -776,14 +1482,43 @@ function getLampInvestigationPoint(lamp) {
 
 function scheduleBrokenLampInvestigation(e, stimulus) {
   if (!stimulus || e.state === 'alert' || e.reactionTimer > 0) return false;
+  const incident = createEnemyIncident('broken-lamp', stimulus.x, stimulus.y, {
+    id: `lamp-broken:${stimulus.lampId}`,
+    caseId: e.state === 'suspicious' ? e.suspicionCaseId : null,
+    geometryId: stimulus.lampId,
+    geometryType: 'lamp',
+    destroyed: true,
+  });
+  if (e.state === 'suspicious') {
+    return refineEnemyIncident(e, incident, 'broken-lamp');
+  }
   const angle = Math.atan2(stimulus.x - e.x, -(stimulus.y - e.y));
-  scheduleReaction(e, 'suspicious', angle, stimulus.x, stimulus.y, enemyReactionDelay(), 'broken-lamp');
+  scheduleReaction(e, 'suspicious', angle, stimulus.x, stimulus.y, enemyReactionDelay(), 'broken-lamp', incident);
   if (!e.pendingReaction) return false;
   e.pendingReaction.forceInvestigation = true;
   return true;
 }
 
-function notifyLampDestroyed(lamp, impactX, impactY, sourceActor = null) {
+function scheduleBrokenWindowInvestigation(e, stimulus) {
+  if (!stimulus || e.state === 'alert' || e.reactionTimer > 0) return false;
+  const incident = createEnemyIncident('broken-window', stimulus.x, stimulus.y, {
+    id: `window-broken:${stimulus.windowId}`,
+    caseId: e.state === 'suspicious' ? e.suspicionCaseId : null,
+    geometryId: stimulus.windowId,
+    geometryType: 'window',
+    destroyed: true,
+  });
+  if (e.state === 'suspicious') {
+    return refineEnemyIncident(e, incident, 'broken-window');
+  }
+  const angle = Math.atan2(stimulus.x - e.x, -(stimulus.y - e.y));
+  scheduleReaction(e, 'suspicious', angle, stimulus.x, stimulus.y, enemyReactionDelay(), 'broken-window', incident);
+  if (!e.pendingReaction) return false;
+  e.pendingReaction.forceInvestigation = e.pendingReaction.suspicionRole === 'investigator';
+  return true;
+}
+
+function notifyLampDestroyed(lamp, impactX, impactY, sourceActor = null, shotId = null, sourceType = 'unknown') {
   const lampId = getLampEvidenceId(lamp);
   if (!lamp || !lampId) return;
   const investigationPoint = getLampInvestigationPoint(lamp);
@@ -791,7 +1526,29 @@ function notifyLampDestroyed(lamp, impactX, impactY, sourceActor = null) {
     if (e === sourceActor || e.alive === false) continue;
     if (!enemyCanSeeWorldPoint(e, impactX, impactY, false)) continue;
     e.observedBrokenLamps.add(lampId);
-    enterEnemyAlert(e, investigationPoint.x, investigationPoint.y, false, 'lamp-impact');
+    const informationQuality = getWitnessInformationQuality(e, {
+      x: impactX,
+      y: impactY,
+      geometryType: 'lamp',
+      destroyed: true,
+    });
+    if (!recordEnemyShotReaction(
+      e,
+      shotId,
+      SHOT_REACTION_RANK.witnessedImpact,
+      'witnessed-lamp-impact',
+      informationQuality
+    )) continue;
+    const incident = createShotIncident(shotId, 'lamp-impact', investigationPoint.x, investigationPoint.y, {
+      sourceType,
+      routeRank: SHOT_REACTION_RANK.witnessedImpact,
+      informationQuality,
+      localization: 'exact',
+      geometryId: lampId,
+      geometryType: 'lamp',
+      destroyed: true,
+    });
+    enterEnemyAlert(e, investigationPoint.x, investigationPoint.y, false, 'lamp-impact', incident);
   }
 }
 
@@ -837,36 +1594,74 @@ function detectLocalVisualStimulus(e, skipCorpses = false) {
     }
   }
 
-  for (const other of enemies) {
-    if (other === e || other.alive === false || other.state !== 'alert' || other.lastKnownX === null) continue;
-    const episodeKey = `${other.index}:${other.alertEpisode}`;
-    if (e.observedAlertEpisodes.has(episodeKey)) continue;
-    if (!enemyCanSeeWorldPoint(e, other.x, other.y)) continue;
-    e.observedAlertEpisodes.add(episodeKey);
-    return { type: 'alerted-enemy', x: other.lastKnownX, y: other.lastKnownY };
+  if (typeof WINDOWS !== 'undefined' && Array.isArray(WINDOWS)) {
+    for (const windowGeometry of WINDOWS) {
+      if (windowGeometry.state !== 'destroyed' || e.observedBrokenWindows.has(windowGeometry.id)) continue;
+      const centerX = windowGeometry.x + windowGeometry.w / 2;
+      const centerY = windowGeometry.y + windowGeometry.h / 2;
+      if (!enemyCanSeeWorldPoint(e, centerX, centerY)) continue;
+      e.observedBrokenWindows.add(windowGeometry.id);
+      const investigationPoint = getImpactInvestigationPoint(e, {
+        x: centerX,
+        y: centerY,
+        geometryX: windowGeometry.x,
+        geometryY: windowGeometry.y,
+        geometryW: windowGeometry.w,
+        geometryH: windowGeometry.h,
+      });
+      return {
+        type: 'broken-window',
+        windowId: windowGeometry.id,
+        x: investigationPoint.x,
+        y: investigationPoint.y,
+      };
+    }
   }
 
   return null;
 }
 
-function notifyDoorDamaged(door, impactX, impactY, sourceActor = null) {
+function notifyDoorDamaged(door, impactX, impactY, sourceActor = null, shotId = null, sourceType = 'unknown') {
   if (!door) return;
   for (const e of enemies) {
     if (e === sourceActor || e.alive === false) continue;
-    const dx = impactX - e.x;
-    const dy = impactY - e.y;
-    if (dx * dx + dy * dy > e.sightRange * e.sightRange) continue;
-    if (!pawnInCone(e.x, e.y, e.angle, e.visionAngle, impactX, impactY)) continue;
+    if (!enemyCanSeeWorldPoint(e, impactX, impactY)) continue;
     if (!enemyCanSeeDoor(e, door)) continue;
 
     const evidenceState = `${door.state}:${Math.round(door.hp)}`;
     e.observedDoorEvidence.set(door.id, evidenceState);
+    const informationQuality = getWitnessInformationQuality(e, {
+      x: impactX,
+      y: impactY,
+      geometryType: 'door',
+      material: door.material,
+      destroyed: door.state === 'destroyed',
+    });
+    const shotDecision = recordEnemyShotReaction(
+      e,
+      shotId,
+      SHOT_REACTION_RANK.witnessedImpact,
+      door.state === 'destroyed' ? 'witnessed-door-destruction' : 'witnessed-door-impact',
+      informationQuality
+    );
+    if (!shotDecision) continue;
     if (e.alertDoorTransit?.doorId === door.id) {
-      e.alertTimer = enemyAlertFrames();
       continue;
     }
     const points = _getDoorInvestigationPoints(door, e.x, e.y);
-    const accepted = enterEnemyAlert(e, points.searchX, points.searchY, false, 'door-impact');
+    const incident = createShotIncident(shotId, 'door-impact', points.searchX, points.searchY, {
+      sourceType,
+      routeRank: SHOT_REACTION_RANK.witnessedImpact,
+      informationQuality,
+      localization: 'exact',
+      geometryId: door.id,
+      geometryType: 'door',
+      destroyed: door.state === 'destroyed',
+    });
+    const accepted = shotDecision === 'refinement' &&
+      (e.currentIncident?.id === incident.id || e.pendingReaction?.incident?.id === incident.id)
+      ? refineEnemyIncident(e, incident, 'door-impact')
+      : enterEnemyAlert(e, points.searchX, points.searchY, false, 'door-impact', incident);
     if (!accepted) continue;
     e.alertDoorTransit = {
       doorId: door.id,
@@ -874,6 +1669,96 @@ function notifyDoorDamaged(door, impactX, impactY, sourceActor = null) {
       phase: 'approaching',
     };
     e.searchPath = buildPath(e.x, e.y, points.approachX, points.approachY);
+    e.searchPathIndex = 0;
+  }
+}
+
+function getImpactInvestigationPoint(e, impact) {
+  const standOff = enemyRadius() + scaleEnemyUnit(8);
+  const hasBounds = [impact.geometryX, impact.geometryY, impact.geometryW, impact.geometryH]
+    .every(Number.isFinite);
+  if (!hasBounds) {
+    const dx = e.x - impact.x;
+    const dy = e.y - impact.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 1e-6) return { x: e.x, y: e.y };
+    return {
+      x: impact.x + (dx / distance) * standOff,
+      y: impact.y + (dy / distance) * standOff,
+    };
+  }
+
+  const left = impact.geometryX;
+  const right = impact.geometryX + impact.geometryW;
+  const top = impact.geometryY;
+  const bottom = impact.geometryY + impact.geometryH;
+  const clampedX = Math.max(left, Math.min(right, impact.x));
+  const clampedY = Math.max(top, Math.min(bottom, impact.y));
+  const candidates = [
+    { x: left - standOff, y: clampedY },
+    { x: right + standOff, y: clampedY },
+    { x: clampedX, y: top - standOff },
+    { x: clampedX, y: bottom + standOff },
+  ].sort((a, b) => (
+    (a.x - e.x) ** 2 + (a.y - e.y) ** 2
+  ) - (
+    (b.x - e.x) ** 2 + (b.y - e.y) ** 2
+  ));
+
+  return candidates.find(candidate => !_pointHitsExpandedWall(
+    candidate.x,
+    candidate.y,
+    enemyRadius() * 0.75
+  )) ?? candidates[0];
+}
+
+function notifyProjectileImpactWitnesses(impact) {
+  if (!impact || impact.geometryType === 'lamp') return;
+  for (const e of enemies) {
+    if (e === impact.sourceActor || e.alive === false) continue;
+    if (!enemyCanSeeWorldPoint(e, impact.x, impact.y)) continue;
+    const informationQuality = getWitnessInformationQuality(e, impact);
+    const shotDecision = recordEnemyShotReaction(
+      e,
+      impact.shotId,
+      SHOT_REACTION_RANK.witnessedImpact,
+      impact.destroyed ? 'witnessed-destruction' : 'witnessed-impact',
+      informationQuality
+    );
+    if (!shotDecision) continue;
+
+    const investigationPoint = getImpactInvestigationPoint(e, impact);
+    const incident = createShotIncident(
+      impact.shotId,
+      'impact',
+      investigationPoint.x,
+      investigationPoint.y,
+      {
+        sourceType: impact.sourceType,
+        routeRank: SHOT_REACTION_RANK.witnessedImpact,
+        informationQuality,
+        localization: 'exact',
+        geometryId: impact.geometryId,
+        geometryType: impact.geometryType,
+        destroyed: impact.destroyed === true,
+      }
+    );
+    if (impact.geometryType === 'window' && impact.destroyed && impact.geometryId) {
+      e.observedBrokenWindows.add(impact.geometryId);
+    }
+    const accepted = shotDecision === 'refinement' &&
+      (e.currentIncident?.id === incident.id || e.pendingReaction?.incident?.id === incident.id)
+      ? refineEnemyIncident(e, incident, 'impact')
+      : enterEnemyAlert(
+        e,
+        investigationPoint.x,
+        investigationPoint.y,
+        false,
+        'impact',
+        incident
+      );
+    if (!accepted) continue;
+    e.searchPath = buildPath(e.x, e.y, investigationPoint.x, investigationPoint.y);
     e.searchPathIndex = 0;
   }
 }
@@ -952,6 +1837,8 @@ function finishReturnToPatrol(e) {
   e.patrolSweepAccum = 0;
   e.reactionTimer = 0;
   e.pendingReaction = null;
+  e.currentIncident = null;
+  e.companionAssignment = null;
   e.cautiousTimer = enemyCautiousFrames();
 }
 
@@ -1015,11 +1902,21 @@ function fireEnemyShot(e) {
   });
   enemyProjectiles.push(projectile);
 
+  if (typeof emitMuzzleFlash === 'function') {
+    emitMuzzleFlash({
+      x: projectile.x,
+      y: projectile.y,
+      shotId: projectile.shotId,
+      sourceType: 'enemy',
+      sourceActor: e,
+    });
+  }
+
   if (typeof emitSound === 'function') {
     emitSound({
       x: e.x,
       y: e.y,
-      radius: typeof soundGunshotRadius === 'function' ? soundGunshotRadius() : scaleEnemyUnit(350),
+      radius: typeof soundGunshotRadius === 'function' ? soundGunshotRadius() : scaleEnemyUnit(600),
       isGunshot: true,
       shotId: projectile.shotId,
       sourceType: 'enemy',
@@ -1160,6 +2057,11 @@ function finishDoorInvestigation(e) {
   e.patrolSweepAccum = e.suspicionReturnSweepAccum;
   e.reactionTimer = 0;
   e.pendingReaction = null;
+  e.currentIncident = null;
+  e.companionAssignment = null;
+  e.suspicionCaseId = null;
+  e.suspicionCaseSlot = null;
+  e.suspicionRole = null;
   e.doorInvestigation = null;
 }
 
@@ -1255,6 +2157,11 @@ function finishDamagedDoorInvestigation(e) {
   e.reactionTimer = 0;
   e.pendingReaction = null;
   e.suspicionReason = null;
+  e.currentIncident = null;
+  e.companionAssignment = null;
+  e.suspicionCaseId = null;
+  e.suspicionCaseSlot = null;
+  e.suspicionRole = null;
   e.damagedDoorInvestigation = null;
 }
 
@@ -1389,12 +2296,14 @@ function resolveEnemySeparation() {
 }
 
 function updateEnemies() {
+  enemyIncidentFrame++;
   if (typeof updateSoundEvents === 'function') updateSoundEvents();
   updateEnemyProjectiles();
   if (playerHitFlashTimer > 0) playerHitFlashTimer--;
 
   for (const e of enemies) {
     e.playerVisibleThisFrame = false;
+    pruneEnemyEventMemory(e);
     if (e.alive !== false && typeof pushOutOfWalls === 'function') {
       pushOutOfWalls(e, enemyRadius());
       pushOutOfWalls(e, enemyRadius());
@@ -1416,11 +2325,16 @@ function updateEnemies() {
           e.suspicionLevel++;
           e.suspicionSourceX = pending.sourceX;
           e.suspicionSourceY = pending.sourceY;
+          e.suspicionCaseId = pending.suspicionCaseId;
+          e.suspicionCaseSlot = pending.suspicionCaseSlot;
+          e.suspicionRole = pending.suspicionRole;
+          e.currentIncident = pending.incident ? { ...pending.incident } : createEnemyIncident(pending.reason, pending.sourceX, pending.sourceY);
+          rememberEnemyIncident(e, e.currentIncident);
           if (pending.doorInvestigation) {
             beginDoorInvestigation(e, pending.doorInvestigation, savedAngle);
           } else if (pending.damagedDoorInvestigation) {
             beginDamagedDoorInvestigation(e, pending.damagedDoorInvestigation, savedAngle);
-          } else if (pending.forceInvestigation || e.suspicionLevel >= 2) {
+          } else if (e.suspicionRole !== 'support' && (pending.forceInvestigation || e.suspicionLevel >= 2)) {
             e.suspicionPhase      = 'moving';
             e.suspicionReturnX    = e.x;
             e.suspicionReturnY    = e.y;
@@ -1433,12 +2347,14 @@ function updateEnemies() {
         }
         if (e.state === 'alert') {
           e.state = previousState;
-          enterEnemyAlert(e, pending.sourceX, pending.sourceY, false, pending.reason);
+          enterEnemyAlert(e, pending.sourceX, pending.sourceY, false, pending.reason, pending.incident);
         } else {
           e.pendingReaction = null;
         }
       }
     }
+
+    processMuzzleFlashStimuli(e);
 
     // 2. Vision cone detection. Ordinary patrol has a readable reaction window;
     // suspicious guards confirm quickly, while already-heightened states react immediately.
@@ -1460,13 +2376,34 @@ function updateEnemies() {
     // 3. Local visual evidence, then delayed proximity detection.
     else {
       const corpseHandled = applyVisibleCorpseOverride(e);
-      if (!corpseHandled && e.state !== 'alert' && e.reactionTimer === 0 &&
+      let companionHandled = false;
+      const alertCompanionStimulus = corpseHandled ? null : detectVisibleCompanionIncident(e);
+      if (alertCompanionStimulus) {
+        companionHandled = acceptCompanionIncident(
+          e,
+          alertCompanionStimulus.sourceEnemy,
+          alertCompanionStimulus.incident
+        );
+      }
+      const suspiciousCompanionStimulus = corpseHandled || alertCompanionStimulus
+        ? null
+        : detectVisibleSuspiciousCompanionIncident(e);
+      if (suspiciousCompanionStimulus) {
+        companionHandled = acceptSuspiciousCompanionIncident(
+          e,
+          suspiciousCompanionStimulus.sourceEnemy,
+          suspiciousCompanionStimulus.incident
+        ) || companionHandled;
+      }
+      if (!corpseHandled && !companionHandled && !e.companionAssignment && e.state !== 'alert' && e.reactionTimer === 0 &&
           !e.doorInvestigation && !e.damagedDoorInvestigation) {
         const stimulus = detectLocalVisualStimulus(e, true);
         if (stimulus?.type === 'door' && stimulus.damaged) {
           scheduleDamagedDoorInvestigation(e, stimulus.doorId);
         } else if (stimulus?.type === 'broken-lamp') {
           scheduleBrokenLampInvestigation(e, stimulus);
+        } else if (stimulus?.type === 'broken-window') {
+          scheduleBrokenWindowInvestigation(e, stimulus);
         } else if (stimulus) {
           enterEnemyAlert(e, stimulus.x, stimulus.y, false, stimulus.type);
         }
@@ -1496,6 +2433,11 @@ function updateEnemies() {
           e.targetAngle = e.suspicionOriginalAngle; // restore original facing
           e.reactionTimer = 0;
           e.pendingReaction = null;
+          e.currentIncident = null;
+          e.companionAssignment = null;
+          e.suspicionCaseId = null;
+          e.suspicionCaseSlot = null;
+          e.suspicionRole = null;
           e.cautiousTimer = enemyCautiousFrames();
         }
 
@@ -1529,6 +2471,11 @@ function updateEnemies() {
           e.targetAngle = e.suspicionOriginalAngle;
           e.reactionTimer = 0;
           e.pendingReaction = null;
+          e.currentIncident = null;
+          e.companionAssignment = null;
+          e.suspicionCaseId = null;
+          e.suspicionCaseSlot = null;
+          e.suspicionRole = null;
           e.cautiousTimer = enemyCautiousFrames();
         }
       }
@@ -1564,6 +2511,7 @@ function updateEnemies() {
     // Sight re-acquisition during search is handled by step 2 (overrides to alert).
     if (e.state === 'searching') {
       if (followNavPath(e)) {
+        if (e.companionAssignment) e.companionAssignment = null;
         e.targetAngle      += enemySearchSweepRate();
         e.searchSweepAccum += enemySearchSweepRate();
         // Sweep done with no re-acquisition ??path back to patrol/home before resuming.

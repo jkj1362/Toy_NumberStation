@@ -277,7 +277,7 @@ function gameTunedUnit(key, fallback) {
   return scaleGameUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
 }
 
-function doorMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorMaxHp', 200) : 200; }
+function doorMaxHp() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorMaxHp', 2000) : 2000; }
 function doorSoundTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundClosedDoorTransmission', 0.8) : 0.8; }
 function doorDamage() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorDamage', DOOR_DAMAGE) : DOOR_DAMAGE; }
 function doorProjectileResistance() { return typeof getTuningNumber === 'function' ? getTuningNumber('doorProjectileResistance', 0.5) : 0.5; }
@@ -840,15 +840,18 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
   if (door.hp <= 0) {
     door.hp = 0;
     setDoorState(door, 'destroyed');
-    if (typeof emitSound === 'function') {
+    if (typeof emitSound === 'function' && (impact?.shotId === null || impact?.shotId === undefined)) {
       emitSound({
         x: door.x + door.w / 2,
         y: door.y + door.h / 2,
-        radius: typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(240),
+        radius: typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(560),
         sourceType: 'door',
         sourceActor: door,
         shotId: impact?.shotId,
-        canAlertEnemies: impact?.shotId ? false : undefined,
+        impactKind: 'destruction',
+        geometryId: door.id,
+        geometryType: 'door',
+        destroyed: true,
       });
     }
   } else {
@@ -859,7 +862,9 @@ function damageDoor(door, amount = doorDamage(), impact = null) {
       door,
       typeof impact.x === 'number' ? impact.x : door.x + door.w / 2,
       typeof impact.y === 'number' ? impact.y : door.y + door.h / 2,
-      impact.sourceActor ?? null
+      impact.sourceActor ?? null,
+      impact.shotId ?? null,
+      impact.sourceType ?? 'unknown'
     );
   }
   return true;
@@ -880,15 +885,18 @@ function damageWindow(windowGeometry, amount = windowDamage(), impact = null) {
     windowGeometry.state = 'destroyed';
     markGeometryDirty();
     activateWindowExit(windowGeometry);
-    if (typeof emitSound === 'function') {
+    if (typeof emitSound === 'function' && (impact?.shotId === null || impact?.shotId === undefined)) {
       emitSound({
         x: windowGeometry.x + windowGeometry.w / 2,
         y: windowGeometry.y + windowGeometry.h / 2,
-        radius: typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(240),
+        radius: typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(560),
         sourceType: 'window',
         sourceActor: windowGeometry,
         shotId: impact?.shotId,
-        canAlertEnemies: impact?.shotId ? false : undefined,
+        impactKind: 'destruction',
+        geometryId: windowGeometry.id,
+        geometryType: 'window',
+        destroyed: true,
       });
     }
   }
@@ -1120,16 +1128,26 @@ function emitProjectileImpact(projectile, target, x, y) {
     destructible: target.destructible === true,
     projectileBehavior: target.projectileBehavior,
     destroyed: target.state === 'destroyed',
+    impactKind: target.state === 'destroyed' ? 'destruction' : 'impact',
+    geometryX: target.x,
+    geometryY: target.y,
+    geometryW: target.w,
+    geometryH: target.h,
   };
   projectileImpactEvents.push(event);
   if (projectileImpactEvents.length > 128) projectileImpactEvents.shift();
+  if (typeof notifyProjectileImpactWitnesses === 'function') {
+    notifyProjectileImpactWitnesses(event);
+  }
 
   if (typeof emitSound === 'function') {
-    const radius = target.geometryType === 'window'
-      ? (typeof soundWindowImpactRadius === 'function' ? soundWindowImpactRadius() : scaleGameUnit(90))
+    const radius = event.destroyed && (target.geometryType === 'door' || target.geometryType === 'window')
+      ? (typeof soundGeometryDestructionRadius === 'function' ? soundGeometryDestructionRadius() : scaleGameUnit(560))
+      : (target.geometryType === 'window'
+      ? (typeof soundWindowImpactRadius === 'function' ? soundWindowImpactRadius() : scaleGameUnit(500))
       : (target.geometryType === 'door' && target.material === 'metal'
-        ? (typeof soundMetalDoorImpactRadius === 'function' ? soundMetalDoorImpactRadius() : scaleGameUnit(260))
-        : (typeof soundProjectileImpactRadius === 'function' ? soundProjectileImpactRadius() : scaleGameUnit(220)));
+        ? (typeof soundMetalDoorImpactRadius === 'function' ? soundMetalDoorImpactRadius() : scaleGameUnit(480))
+        : (typeof soundProjectileImpactRadius === 'function' ? soundProjectileImpactRadius() : scaleGameUnit(420))));
     emitSound({
       x,
       y,
@@ -1138,7 +1156,11 @@ function emitProjectileImpact(projectile, target, x, y) {
       sourceActor: projectile.sourceActor,
       shotId: projectile.shotId,
       isProjectileImpact: true,
-      canAlertEnemies: false,
+      impactKind: event.impactKind,
+      geometryId: event.geometryId,
+      geometryType: event.geometryType,
+      material: event.material,
+      destroyed: event.destroyed,
     });
   }
 }
@@ -1167,7 +1189,14 @@ function resolveProjectileTravel(projectile, getActorTargets, onActorHit) {
       projectile.hitTargetIds.add(hit.target.id);
       const destroyed = typeof destroyLamp === 'function' && destroyLamp(hit.target.lamp);
       if (destroyed && typeof notifyLampDestroyed === 'function') {
-        notifyLampDestroyed(hit.target.lamp, hitX, hitY, projectile.sourceActor);
+        notifyLampDestroyed(
+          hit.target.lamp,
+          hitX,
+          hitY,
+          projectile.sourceActor,
+          projectile.shotId,
+          projectile.sourceType
+        );
       }
       emitProjectileImpact(projectile, hit.target, hitX, hitY);
       projectile.x = hitX;
@@ -1349,6 +1378,7 @@ function update() {
     return;
   }
 
+  if (typeof updateMuzzleFlashes === 'function') updateMuzzleFlashes();
   if (gamePhase === 'gameover') return;
 
   updateDoorAnimations();
@@ -1926,6 +1956,7 @@ function draw() {
   measurePerf('enemiesMs', drawEnemies);
   drawProjectiles();
   drawPlayer();
+  if (typeof drawMuzzleFlashSources === 'function') drawMuzzleFlashSources();
   measurePerf('lightingMs', drawLighting);
   measurePerf('fogMs', drawFog);
   drawHiddenEnemiesDebug();

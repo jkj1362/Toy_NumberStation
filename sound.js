@@ -1,4 +1,4 @@
-const GUNSHOT_RADIUS    = scaleEnemyUnit(350);
+const GUNSHOT_RADIUS    = scaleEnemyUnit(600);
 const FOOTSTEP_RADIUS   = scaleEnemyUnit(120);   // max footstep reach at walk speed
 const WALK_SPEED        = scaleEnemyUnit(4);     // player.speed at normal walk; used for footstep scaling
 const SOUND_LIFETIME    = 30;    // frames for visual ring to fade
@@ -20,11 +20,11 @@ function soundTunedUnit(key, fallback) {
   return scaleEnemyUnit(typeof getTuningNumber === 'function' ? getTuningNumber(key, fallback) : fallback);
 }
 
-function soundGunshotRadius() { return soundTunedUnit('soundGunshotRadius', 350); }
-function soundProjectileImpactRadius() { return soundTunedUnit('soundProjectileImpactRadius', 220); }
-function soundWindowImpactRadius() { return soundTunedUnit('soundWindowImpactRadius', 90); }
-function soundMetalDoorImpactRadius() { return soundTunedUnit('soundMetalDoorImpactRadius', 260); }
-function soundGeometryDestructionRadius() { return soundTunedUnit('soundGeometryDestructionRadius', 240); }
+function soundGunshotRadius() { return soundTunedUnit('soundGunshotRadius', 600); }
+function soundProjectileImpactRadius() { return soundTunedUnit('soundProjectileImpactRadius', 420); }
+function soundWindowImpactRadius() { return soundTunedUnit('soundWindowImpactRadius', 500); }
+function soundMetalDoorImpactRadius() { return soundTunedUnit('soundMetalDoorImpactRadius', 480); }
+function soundGeometryDestructionRadius() { return soundTunedUnit('soundGeometryDestructionRadius', 560); }
 function soundFootstepRadius() { return soundTunedUnit('soundFootstepRadius', 120); }
 function soundBodyFallRadius() { return soundTunedUnit('soundBodyFallRadius', 140); }
 function soundWallTransmission() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundWallTransmission', SOUND_WALL_TRANSMISSION) : SOUND_WALL_TRANSMISSION; }
@@ -67,12 +67,14 @@ let soundEvents = [];
 let soundAttenuationEvents = [];
 let playerSoundCueEvents = [];
 let footstepTimer = 0;
+let nextSoundIncidentId = 1;
 
 function resetSoundSystem() {
   soundEvents.length = 0;
   soundAttenuationEvents.length = 0;
   playerSoundCueEvents.length = 0;
   footstepTimer = 0;
+  nextSoundIncidentId = 1;
 }
 
 function updateSoundEvents() {
@@ -379,8 +381,38 @@ function evaluateEnemySound(e, sound) {
   const dy = e.y - sound.y;
   const directDistance = Math.sqrt(dx * dx + dy * dy);
   path.distance = path.pathDistance ?? directDistance;
-  path.heard = path.distance <= path.effectiveRadius;
+  const sameRoomImpact = sound.isProjectileImpact &&
+    findSoundRoomAt(sound.x, sound.y)?.id === findSoundRoomAt(e.x, e.y)?.id;
+  path.heard = sameRoomImpact || path.distance <= path.effectiveRadius;
+  path.sameRoomImpact = sameRoomImpact;
+  if (sound.isProjectileImpact && path.localization !== 'muffled') {
+    const perceived = getEnemyImpactReactionPoint(e, sound, path);
+    path.localization = 'vague';
+    path.perceivedX = perceived.x;
+    path.perceivedY = perceived.y;
+  }
   return path;
+}
+
+function getEnemyImpactReactionPoint(e, sound, path) {
+  if (path.localization === 'muffled' && path.proxyDoorId !== null) {
+    return { x: path.proxyX, y: path.proxyY };
+  }
+
+  const dx = sound.x - e.x;
+  const dy = sound.y - e.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= 1e-6) return { x: e.x, y: e.y };
+
+  const perceivedDistance = Math.min(
+    distance * 0.35,
+    soundVagueSourceDistance(),
+    sound.radius * 0.25
+  );
+  return {
+    x: e.x + (dx / distance) * perceivedDistance,
+    y: e.y + (dy / distance) * perceivedDistance,
+  };
 }
 
 function getEnemySoundReactionPoint(path) {
@@ -533,6 +565,10 @@ function pushSoundAttenuationDebug(e, sound, path, heard = true) {
 }
 
 function emitSoundEvent(sound) {
+  const incidentId = sound.incidentId ??
+    (sound.shotId !== null && sound.shotId !== undefined
+      ? `shot:${sound.shotId}`
+      : `sound:${nextSoundIncidentId++}`);
   const event = {
     x: sound.x,
     y: sound.y,
@@ -540,7 +576,12 @@ function emitSoundEvent(sound) {
     life: soundLifetime(),
     sourceType: sound.sourceType ?? 'unknown',
     shotId: sound.shotId,
+    isGunshot: sound.isGunshot === true,
     isProjectileImpact: sound.isProjectileImpact === true,
+    incidentId,
+    geometryId: sound.geometryId ?? null,
+    geometryType: sound.geometryType ?? null,
+    destroyed: sound.destroyed === true,
   };
   soundEvents.push(event);
   evaluateAndPushPlayerSoundCue(sound);
@@ -553,24 +594,53 @@ function emitSoundEvent(sound) {
     pushSoundAttenuationDebug(e, sound, path, path.heard);
     if (!path.heard) continue;
 
-    if (sound.isGunshot && pawnInCone(e.x, e.y, e.angle, e.visionAngle, sound.x, sound.y) && hasLOS(e.x, e.y, sound.x, sound.y)) {
-      // Direct observation of muzzle flash: immediate alert.
-      const actorTargetKnown = sound.sourceType === 'enemy' && sound.sourceActor?.state === 'alert' &&
-        sound.sourceActor.lastKnownX !== null;
-      const targetX = actorTargetKnown ? sound.sourceActor.lastKnownX : sound.x;
-      const targetY = actorTargetKnown ? sound.sourceActor.lastKnownY : sound.y;
-      const reason = actorTargetKnown ? 'alerted-enemy' : (sound.sourceType === 'player' ? 'player' : 'sound');
-      if (typeof enterEnemyAlert === 'function') enterEnemyAlert(e, targetX, targetY, false, reason);
+    if (sound.isProjectileImpact && typeof handleProjectileImpactReaction === 'function') {
+      handleProjectileImpactReaction(e, sound, path);
       continue;
+    }
+
+    const reactionPoint = getEnemySoundReactionPoint(path);
+    let incident = null;
+    if (sound.isGunshot && typeof recordEnemyShotReaction === 'function') {
+      const informationQuality = typeof getSoundInformationQuality === 'function'
+        ? getSoundInformationQuality(sound, path)
+        : 0;
+      const shotDecision = recordEnemyShotReaction(
+        e,
+        sound.shotId,
+        SHOT_REACTION_RANK.heardGunshot,
+        'heard-gunshot',
+        informationQuality
+      );
+      if (!shotDecision) continue;
+      if (typeof createShotIncident === 'function') {
+        incident = createShotIncident(sound.shotId, 'gunshot', reactionPoint.x, reactionPoint.y, {
+          sourceType: sound.sourceType,
+          id: incidentId,
+          routeRank: SHOT_REACTION_RANK.heardGunshot,
+          informationQuality,
+          localization: path.localization,
+        });
+        incident.sameShotRefinement = shotDecision !== 'new';
+      }
+    } else if (typeof createEnemyIncident === 'function') {
+      incident = createEnemyIncident('sound', reactionPoint.x, reactionPoint.y, {
+        id: incidentId,
+        sourceType: sound.sourceType,
+        informationQuality: typeof getSoundInformationQuality === 'function'
+          ? getSoundInformationQuality(sound, path)
+          : 0,
+        localization: path.localization,
+      });
     }
 
     if (path.localization === 'muffled' && path.proxyDoorId !== null &&
         typeof scheduleMuffledDoorInvestigation === 'function') {
-      if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y) || e.doorInvestigation) continue;
+      const reason = sound.isGunshot ? 'gunshot' : 'sound';
+      if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y, reason, incident) || e.doorInvestigation) continue;
     }
 
-    const reactionPoint = getEnemySoundReactionPoint(path);
-    applySoundReaction(e, reactionPoint.x, reactionPoint.y, sound.isGunshot ? 'gunshot' : 'sound');
+    applySoundReaction(e, reactionPoint.x, reactionPoint.y, sound.isGunshot ? 'gunshot' : 'sound', incident);
   }
 }
 
@@ -584,6 +654,7 @@ function notifyPlayerMoved() {
   const noiseScale = typeof player.noiseScale === 'number'
     ? player.noiseScale
     : player.speed / WALK_SPEED;
+  const incidentId = `sound:${nextSoundIncidentId++}`;
 
   // Visual ring uses the same effective scale as hearing so the tradeoff is readable.
   emitSoundEvent({
@@ -593,21 +664,39 @@ function notifyPlayerMoved() {
     sourceType: 'player',
     sourceActor: player,
     canAlertEnemies: false,
+    incidentId,
   });
 
   for (const e of enemies) {
     // Per-enemy footstep radius: walk reaches FOOTSTEP_RADIUS, sneak is quieter, sprint is louder.
     const footRadius = e.proximityRadius + noiseScale * (soundFootstepRadius() - e.proximityRadius);
-    const sound = { x: player.x, y: player.y, radius: footRadius, sourceType: 'player', sourceActor: player };
+    const sound = {
+      x: player.x,
+      y: player.y,
+      radius: footRadius,
+      sourceType: 'player',
+      sourceActor: player,
+      incidentId,
+    };
     const path = evaluateEnemySound(e, sound);
     pushSoundAttenuationDebug(e, sound, path, path.heard);
     if (!path.heard) continue;
+    const reactionPoint = getEnemySoundReactionPoint(path);
+    const incident = typeof createEnemyIncident === 'function'
+      ? createEnemyIncident('sound', reactionPoint.x, reactionPoint.y, {
+        id: incidentId,
+        sourceType: 'player',
+        informationQuality: typeof getSoundInformationQuality === 'function'
+          ? getSoundInformationQuality(sound, path)
+          : 0,
+        localization: path.localization,
+      })
+      : null;
     if (path.localization === 'muffled' && path.proxyDoorId !== null &&
         typeof scheduleMuffledDoorInvestigation === 'function') {
-      if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y) || e.doorInvestigation) continue;
+      if (scheduleMuffledDoorInvestigation(e, path.proxyDoorId, sound.x, sound.y, 'sound', incident) || e.doorInvestigation) continue;
     }
-    const reactionPoint = getEnemySoundReactionPoint(path);
-    applySoundReaction(e, reactionPoint.x, reactionPoint.y);
+    applySoundReaction(e, reactionPoint.x, reactionPoint.y, 'sound', incident);
   }
 }
 

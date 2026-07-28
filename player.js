@@ -266,6 +266,15 @@ function updatePlayer(playerInput, activeProjectiles) {
       sourceType: 'player',
     });
     activeProjectiles.push(projectile);
+    if (typeof emitMuzzleFlash === 'function') {
+      emitMuzzleFlash({
+        x: projectile.x,
+        y: projectile.y,
+        shotId: projectile.shotId,
+        sourceType: 'player',
+        sourceActor: player,
+      });
+    }
     emitSound({
       x: player.x,
       y: player.y,

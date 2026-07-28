@@ -19,13 +19,13 @@ The player pawn is a top-down character with position, facing angle, collision r
 - Left mouse button or gamepad right trigger fires a projectile along the current facing direction.
 - `E` or gamepad face-left / button `2` performs regular interaction.
 - Keyboard `]` or gamepad `B` resets the mission.
-- Movement is pushed out of current movement blockers, which means walls plus closed doors.
+- Movement is pushed out of current movement blockers: walls, intact physical windows, and the current rotated panels of intact doors in closed/opening/open/closing states.
 - Fog is removed only inside the current wall-occluded vision cone and the close proximity circle.
 - The default proximity reveal radius is currently `35` design units and is exposed in the tuning/debug panel.
 
 ## Current Caveats
 
-- Projectiles are simple line visuals and collision checks, not a generalized weapon system.
+- Projectiles now use shared swept ballistic collision and penetration, but there is still no generalized weapon, ammunition, or inventory system.
 - Vision uses current ray blockers, so open door panels and closed doors affect visibility.
 
 ## Related Files

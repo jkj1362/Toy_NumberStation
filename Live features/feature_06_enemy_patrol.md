@@ -16,12 +16,13 @@ The prototype currently has three authored enemies with static and waypoint patr
 - Doorway waypoints use a wider arrival tolerance so enemies do not need to hit the exact center of tight door gaps.
 - While inside an open doorway's expanded box, enemy movement is constrained to the doorway crossing line; normal flexible steering resumes after leaving the doorway.
 - Moving enemies create visual footstep rings.
+- Feature 13 can temporarily interrupt a patrol with local evidence, suspicion-team assignments, or alert incidents, then restore the saved position, facing, waypoint, pause, and sweep state when an unsuccessful investigation returns.
 
 ## Current Caveats
 
 - Patrols are hardcoded in `enemy.js`.
 - Enemy auto-door behavior is functional first pass and needs feel tuning.
-- There is no route editor, schedule system, or investigation communication between enemies.
+- There is no route editor or schedule system. Local investigation/alert communication exists through Feature 13, but facility-level assignments do not.
 
 ## Related Files
 

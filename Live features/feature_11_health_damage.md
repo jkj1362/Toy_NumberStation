@@ -10,6 +10,7 @@ Player and enemies now use explicit HP, combat damage, death state, corpses, and
 - Living enemies start with `100` HP.
 - Player projectiles deal `100` enemy damage, so an unarmored standard enemy dies from one player shot.
 - Standard bullets also carry `1.0` penetration power against `1.0` unarmored body resistance, so the damaging shot stops in the first person unless power is raised through the current tuning hook.
+- Hitting or penetrating a living actor creates no additional ballistic-impact sound/stimulus. Victim damage/death, body-fall sound, later corpse discovery, and companion observation provide the relevant reactions.
 - Enemy projectiles deal `50` player damage.
 - Melee enemies deal `25` player damage when they reach the player, with a short attack cooldown.
 - Player damage triggers the red hit flash.
