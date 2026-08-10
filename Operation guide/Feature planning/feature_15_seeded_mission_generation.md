@@ -1,6 +1,6 @@
 # Feature 15 - Mission Data Separation and Seeded Procedural Runs
 
-**Status: Phase 15A and the Phase 15B-I seeded-grid contract proof are implemented. Phase 15B-II irregular single-floor facility generation is active: the facility-profile registry, generalized generated-space metadata, and local-government-office topology graph are implemented; spatial placement is next. Feature 16 follows only after irregular generated topology is stable enough to exercise connected-space escalation without overfitting to a grid.**
+**Status: Phase 15A and the Phase 15B-I seeded-grid contract proof are implemented. Phase 15B-II irregular single-floor facility generation is the next implementation work. Feature 16 follows only after irregular generated topology is stable enough to exercise connected-space escalation without overfitting to a grid.**
 
 Feature 15 is split into completed data separation, a completed grid-based generator proof, and an irregular single-floor generation pass:
 
@@ -123,18 +123,6 @@ Add a seeded generator that produces valid mission definitions through the same 
 - A facility configuration can deterministically change footprint and enemy population without introducing invalid connector, lamp, spawn, navigation, or sound ownership.
 
 ## Phase 15B-II - Irregular Single-Floor Facility Generation
-
-### Implementation State
-
-First implementation gate completed on 2026-08-10:
-
-- `FACILITY_PROFILES` registers the tutorial plus the current early, late, and special facility catalog. Only `tutorial_grid` is a playable generator and `local_government_office` has active irregular-generation implementation; the remaining profiles are metadata placeholders rather than partial generators.
-- The aligned generated mission identifies itself with `generation.profileId = 'tutorial_grid'` and its generated room records now carry `spaceType: 'room'` plus `roomSize: 'medium'` without changing its geometry or runtime behavior.
-- `generateLocalGovernmentOfficeTopology(seed, overrides)` produces a deterministic topology request with `10-16` room nodes, corridor and junction nodes, public/restricted/secure zones, mandatory reception/office/checkpoint/secure/service motifs, optional office/service rooms, and `1-3` alternate-route loops.
-- Topology output contains no row/column identities. It owns stable nodes and connector intents only; it does not yet assign coordinates or compile a playable mission.
-- `mission-generation.test.js` validates the facility registry, tutorial space metadata, mandatory local-office nodes, stable edge references, full graph connectivity, cycle count, dead ends, lack of grid metadata, and determinism across 100 local-office topology seeds.
-
-Next implementation gate: Step 4 variable-size spatial placement, followed by corridor routing and mission compilation. Until that gate is complete, the current playable default remains the tutorial/grid generator.
 
 ### Phase Decision
 

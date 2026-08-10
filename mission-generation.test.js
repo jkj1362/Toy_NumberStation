@@ -9,13 +9,9 @@ for (const file of ['mission.js', 'mission-generator.js']) {
 vm.runInContext(`
   globalThis.__generateMission = generateSeededMission;
   globalThis.__referenceMission = REFERENCE_MISSION;
-  globalThis.__facilityProfiles = FACILITY_PROFILES;
-  globalThis.__generateLocalOfficeTopology = generateLocalGovernmentOfficeTopology;
 `, context);
 
 const generateMission = context.__generateMission;
-const facilityProfiles = context.__facilityProfiles;
-const generateLocalOfficeTopology = context.__generateLocalOfficeTopology;
 
 function assertDeepFrozen(value, path = 'mission') {
   if (!value || typeof value !== 'object') return;
@@ -71,7 +67,6 @@ function assertGeneratedLampPlacement(mission, seed) {
 function validateGeneratedMission(mission, seed) {
   assert.equal(mission.generation.seed, String(seed));
   assert.equal(mission.generation.kind, 'seeded_grid');
-  assert.equal(mission.generation.profileId, 'tutorial_grid');
   assert.equal(mission.rooms.length, 9);
   assert.equal(mission.connectors.length, 13);
   assert.equal(mission.doors.length, 10);
@@ -160,8 +155,6 @@ function validateGeneratedMission(mission, seed) {
   }
   assert.equal(pointInsideWall(mission.player.start), false, `${seed}: player cannot start in a wall`);
   for (const room of mission.rooms) {
-    assert.equal(room.spaceType, 'room');
-    assert.equal(room.roomSize, 'medium');
     assert.equal(pointInsideWall(room.center), false, `${seed}: ${room.id} center cannot be in a wall`);
   }
 
@@ -280,76 +273,6 @@ for (let i = 0; i < dense.enemies.spawns.length; i++) {
     const outwardY = a.y - room.center.y;
     assert.ok(forwardX * outwardX + forwardY * outwardY > 0, 'same-room enemies should initially face outward');
   }
-}
-
-assert.equal(facilityProfiles.tutorial_grid.progressionGroup, 'tutorial');
-assert.equal(facilityProfiles.local_government_office.progressionGroup, 'early');
-assert.equal(facilityProfiles.prison.progressionGroup, 'special');
-assert.equal(Object.keys(facilityProfiles).length, 11);
-
-function validateLocalOfficeTopology(topology, seed) {
-  assert.equal(topology.profileId, 'local_government_office');
-  assert.equal(topology.seed, String(seed));
-  assert.ok(topology.roomCount >= 10 && topology.roomCount <= 16);
-  assert.equal(topology.nodes.filter(node => node.spaceType === 'room').length, topology.roomCount);
-  assert.ok(topology.nodes.some(node => node.spaceType === 'corridor'));
-  assert.ok(topology.nodes.some(node => node.spaceType === 'junction'));
-  assert.ok(topology.nodes.every(node => !('grid' in node) && !('row' in node) && !('column' in node)));
-
-  const nodeIds = new Set(topology.nodes.map(node => node.id));
-  assert.equal(nodeIds.size, topology.nodes.length);
-  for (const requiredId of [
-    'reception',
-    'public_service_office',
-    'administration_office',
-    'records_office',
-    'meeting_room',
-    'security_checkpoint',
-    'secure_records',
-    'staff_break_room',
-    'storage_room',
-    'main_hall',
-    'service_corridor',
-    'secure_corridor',
-  ]) {
-    assert.ok(nodeIds.has(requiredId), `${seed}: topology must include ${requiredId}`);
-  }
-
-  const adjacency = new Map(topology.nodes.map(node => [node.id, []]));
-  for (const edge of topology.edges) {
-    assert.ok(nodeIds.has(edge.a) && nodeIds.has(edge.b), `${seed}: edge endpoints must exist`);
-    adjacency.get(edge.a).push(edge.b);
-    adjacency.get(edge.b).push(edge.a);
-  }
-  const reached = new Set(['reception']);
-  const queue = ['reception'];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    for (const neighbor of adjacency.get(current)) {
-      if (reached.has(neighbor)) continue;
-      reached.add(neighbor);
-      queue.push(neighbor);
-    }
-  }
-  assert.equal(reached.size, topology.nodes.length, `${seed}: office topology must be connected`);
-  assert.equal(topology.edges.length - topology.nodes.length + 1, topology.loopCount);
-  assert.ok(topology.loopCount >= 1 && topology.loopCount <= 3);
-  assert.ok(topology.nodes.filter(node => adjacency.get(node.id).length === 1).length >= 1);
-}
-
-const officeTopology = generateLocalOfficeTopology('office-deterministic');
-assert.equal(
-  JSON.stringify(officeTopology),
-  JSON.stringify(generateLocalOfficeTopology('office-deterministic')),
-  'same seed must reproduce the same local-office topology'
-);
-assert.notEqual(
-  JSON.stringify(officeTopology),
-  JSON.stringify(generateLocalOfficeTopology('office-different')),
-  'different seeds should vary the local-office topology request'
-);
-for (let index = 0; index < 100; index++) {
-  validateLocalOfficeTopology(generateLocalOfficeTopology(`office-validation-${index}`), `office-validation-${index}`);
 }
 
 console.log('Seeded mission generation checks passed for 100 seeds and configurable facility scales.');

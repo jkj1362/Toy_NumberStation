@@ -28,160 +28,6 @@ function shuffleMissionItems(items, random) {
   return shuffled;
 }
 
-const FACILITY_PROFILES = Object.freeze({
-  tutorial_grid: Object.freeze({
-    id: 'tutorial_grid',
-    displayName: 'Tutorial Facility',
-    progressionGroup: 'tutorial',
-    generatorKind: 'seeded_grid',
-    implementationStatus: 'implemented',
-  }),
-  local_government_office: Object.freeze({
-    id: 'local_government_office',
-    displayName: 'Local Government Office',
-    progressionGroup: 'early',
-    generatorKind: 'irregular_single_floor',
-    implementationStatus: 'topology',
-    roomCount: Object.freeze({ min: 10, max: 16 }),
-    enemyCount: Object.freeze({ min: 7, max: 12 }),
-    roomSizeWeights: Object.freeze({ small: 0.45, medium: 0.40, large: 0.15 }),
-    loopCount: Object.freeze({ min: 1, max: 3 }),
-    deadEndCount: Object.freeze({ min: 1, max: 4 }),
-    checkpointCount: Object.freeze({ min: 1, max: 2 }),
-    securityZoneCount: 3,
-  }),
-  warehouse: Object.freeze({ id: 'warehouse', displayName: 'Warehouse', progressionGroup: 'early', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  factory: Object.freeze({ id: 'factory', displayName: 'Factory', progressionGroup: 'early', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  laboratory: Object.freeze({ id: 'laboratory', displayName: 'Laboratory', progressionGroup: 'early', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  library: Object.freeze({ id: 'library', displayName: 'Library', progressionGroup: 'early', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  military_base: Object.freeze({ id: 'military_base', displayName: 'Military Base', progressionGroup: 'late', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  mansion: Object.freeze({ id: 'mansion', displayName: 'Mansion', progressionGroup: 'late', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  central_government_office: Object.freeze({ id: 'central_government_office', displayName: 'Central Government Office', progressionGroup: 'late', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  underground_bunker: Object.freeze({ id: 'underground_bunker', displayName: 'Underground Bunker', progressionGroup: 'late', generatorKind: 'unimplemented', implementationStatus: 'planned' }),
-  prison: Object.freeze({ id: 'prison', displayName: 'Prison', progressionGroup: 'special', generatorKind: 'unimplemented', implementationStatus: 'deferred' }),
-});
-
-function chooseWeightedRoomSize(random, weights) {
-  const roll = random();
-  if (roll < weights.small) return 'small';
-  if (roll < weights.small + weights.medium) return 'medium';
-  return 'large';
-}
-
-function generateLocalGovernmentOfficeTopology(seedInput, overrides = {}) {
-  const profile = FACILITY_PROFILES.local_government_office;
-  const seed = String(seedInput);
-  const random = createSeededMissionRandom(`${seed}:local-government-office:topology`);
-  const roomCount = clampMissionInteger(
-    overrides.roomCount,
-    profile.roomCount.min + Math.floor(random() * (profile.roomCount.max - profile.roomCount.min + 1)),
-    profile.roomCount.min,
-    profile.roomCount.max
-  );
-  const loopCount = clampMissionInteger(
-    overrides.loopCount,
-    profile.loopCount.min + Math.floor(random() * (profile.loopCount.max - profile.loopCount.min + 1)),
-    profile.loopCount.min,
-    profile.loopCount.max
-  );
-  const nodes = [];
-  const edges = [];
-
-  function addRoom(id, motif, securityZone, roomSize = null, mandatory = true) {
-    nodes.push({
-      id,
-      spaceType: 'room',
-      roomSize: roomSize ?? chooseWeightedRoomSize(random, profile.roomSizeWeights),
-      motif,
-      securityZone,
-      mandatory,
-    });
-  }
-
-  function addCirculation(id, spaceType, motif, securityZone) {
-    nodes.push({ id, spaceType, roomSize: null, motif, securityZone, mandatory: true });
-  }
-
-  function connect(a, b, connectorKind = 'door', role = 'ordinary') {
-    const id = `link_${[a, b].sort().join('__')}`;
-    if (edges.some(edge => edge.id === id)) return false;
-    edges.push({ id, a, b, connectorKind, role });
-    return true;
-  }
-
-  addCirculation('entry_passage', 'corridor', 'reception_checkpoint', 'public');
-  addCirculation('main_hall', 'corridor', 'circulation_spine', 'public');
-  addCirculation('service_corridor', 'corridor', 'storage_service_branch', 'restricted');
-  addCirculation('secure_corridor', 'corridor', 'secure_antechamber', 'secure');
-  addCirculation('public_junction', 'junction', 'side_branch_junction', 'public');
-
-  addRoom('reception', 'reception_checkpoint', 'public', 'medium');
-  addRoom('public_service_office', 'office_cluster', 'public', 'large');
-  addRoom('administration_office', 'office_cluster', 'restricted', 'medium');
-  addRoom('records_office', 'office_cluster', 'restricted', 'medium');
-  addRoom('meeting_room', 'office_cluster', 'public', 'medium');
-  addRoom('security_checkpoint', 'reception_checkpoint', 'restricted', 'small');
-  addRoom('secure_records', 'secure_antechamber', 'secure', 'medium');
-  addRoom('staff_break_room', 'storage_service_branch', 'restricted', 'small');
-  addRoom('storage_room', 'storage_service_branch', 'restricted', 'small');
-
-  connect('reception', 'entry_passage', 'door', 'entry');
-  connect('entry_passage', 'main_hall', 'opening', 'circulation');
-  connect('main_hall', 'public_junction', 'opening', 'circulation');
-  connect('public_junction', 'public_service_office');
-  connect('main_hall', 'administration_office');
-  connect('main_hall', 'records_office');
-  connect('public_junction', 'meeting_room');
-  connect('main_hall', 'security_checkpoint', 'door', 'checkpoint');
-  connect('security_checkpoint', 'secure_corridor', 'door', 'checkpoint');
-  connect('secure_corridor', 'secure_records');
-  connect('main_hall', 'service_corridor', 'opening', 'circulation');
-  connect('service_corridor', 'staff_break_room');
-  connect('service_corridor', 'storage_room');
-
-  const optionalRoomSpecs = shuffleMissionItems([
-    { baseId: 'clerks_office', motif: 'office_cluster', zone: 'public' },
-    { baseId: 'tax_office', motif: 'office_cluster', zone: 'public' },
-    { baseId: 'archive_room', motif: 'secure_antechamber', zone: 'secure' },
-    { baseId: 'supply_room', motif: 'storage_service_branch', zone: 'restricted' },
-    { baseId: 'supervisor_office', motif: 'office_cluster', zone: 'restricted' },
-    { baseId: 'utility_room', motif: 'storage_service_branch', zone: 'restricted' },
-    { baseId: 'conference_room', motif: 'office_cluster', zone: 'public' },
-  ], random);
-  const mandatoryRoomCount = nodes.filter(node => node.spaceType === 'room').length;
-  const optionalCount = roomCount - mandatoryRoomCount;
-  for (let index = 0; index < optionalCount; index++) {
-    const spec = optionalRoomSpecs[index];
-    addRoom(spec.baseId, spec.motif, spec.zone, null, false);
-    const parent = spec.zone === 'secure'
-      ? 'secure_corridor'
-      : (spec.motif === 'storage_service_branch' ? 'service_corridor' : 'public_junction');
-    connect(parent, spec.baseId);
-  }
-
-  const loopCandidates = shuffleMissionItems([
-    ['meeting_room', 'service_corridor'],
-    ['records_office', 'secure_corridor'],
-    ['administration_office', 'public_junction'],
-    ['staff_break_room', 'public_junction'],
-    ['storage_room', 'secure_corridor'],
-  ], random);
-  let addedLoops = 0;
-  for (const [a, b] of loopCandidates) {
-    if (addedLoops >= loopCount) break;
-    if (connect(a, b, 'door', 'alternate-route')) addedLoops++;
-  }
-
-  return Object.freeze({
-    profileId: profile.id,
-    seed,
-    roomCount,
-    loopCount: addedLoops,
-    nodes: Object.freeze(nodes.map(node => Object.freeze(node))),
-    edges: Object.freeze(edges.map(edge => Object.freeze(edge))),
-  });
-}
-
 const DEFAULT_GENERATED_FACILITY_CONFIG = Object.freeze({
   rows: 3,
   columns: 3,
@@ -312,8 +158,6 @@ function generateSeededMission(seedInput, facilityConfig = {}) {
       const ySpec = rows[row];
       const room = {
         id: `room_${row}_${column}`,
-        spaceType: 'room',
-        roomSize: 'medium',
         moduleType: 'rect_standard',
         grid: { row, column },
         center: {
@@ -744,7 +588,6 @@ function generateSeededMission(seedInput, facilityConfig = {}) {
     id: `generated_facility_${hashMissionSeed(seed).toString(16).padStart(8, '0')}`,
     generation: {
       kind: 'seeded_grid',
-      profileId: 'tutorial_grid',
       seed,
       rows: rows.length,
       columns: columns.length,
