@@ -1,7 +1,7 @@
-﻿const ENEMY_DESIGN_WIDTH = 1100;
-const ENEMY_DESIGN_HEIGHT = 750;
-const ENEMY_GAME_WIDTH = 3200;
-const ENEMY_GAME_HEIGHT = 1800;
+﻿const ENEMY_DESIGN_WIDTH = ACTIVE_MISSION.world.designWidth;
+const ENEMY_DESIGN_HEIGHT = ACTIVE_MISSION.world.designHeight;
+const ENEMY_GAME_WIDTH = ACTIVE_MISSION.world.width;
+const ENEMY_GAME_HEIGHT = ACTIVE_MISSION.world.height;
 const ENEMY_SCALE_X = ENEMY_GAME_WIDTH / ENEMY_DESIGN_WIDTH;
 const ENEMY_SCALE_Y = ENEMY_GAME_HEIGHT / ENEMY_DESIGN_HEIGHT;
 const ENEMY_SCALE_UNIT = (ENEMY_SCALE_X + ENEMY_SCALE_Y) / 2;
@@ -112,30 +112,25 @@ function showHiddenEnemiesDebug() { return typeof isDebugOverlayEnabled === 'fun
 
 // Reactive navigation graph ??used by SEARCHING state to path to lastKnownX/Y.
 // Patrol routes use hand-placed waypoints; this graph is only for buildPath().
-const NAV_NODES = Object.fromEntries(Object.entries({
-  lobby:          { x: 460, y: 590 },
-  gap_corr_left:  { x: 270, y: 449 },
-  gap_corr_right: { x: 819, y: 449 },
-  corridor:       { x: 589, y: 229 },
-  gap_room_a:     { x: 409, y: 295 },
-  room_a:         { x: 200, y: 229 },
-  gap_room_bc:    { x: 769, y: 210 },
-  room_bc:        { x: 930, y: 229 },
-  gap_room_f:     { x: 909, y: 590 },
-  room_f:         { x: 991, y: 590 },
-}).map(([id, point]) => [id, scaleEnemyPoint(point)]));
+function getMissionNavigationPoint(node) {
+  if (node.roomId) {
+    const room = ACTIVE_MISSION.rooms.find(item => item.id === node.roomId);
+    return room?.center ?? null;
+  }
+  if (node.connectorId) {
+    const connector = ACTIVE_MISSION.connectors.find(item => item.id === node.connectorId);
+    return connector?.position ?? null;
+  }
+  return null;
+}
 
-const NAV_EDGES = [
-  ['lobby',          'gap_corr_left'],
-  ['gap_corr_left',  'corridor'],
-  ['lobby',          'gap_corr_right'],
-  ['gap_corr_right', 'gap_room_f'],
-  ['gap_room_f',     'room_f'],
-  ['corridor',       'gap_room_a'],
-  ['gap_room_a',     'room_a'],
-  ['corridor',       'gap_room_bc'],
-  ['gap_room_bc',    'room_bc'],
-];
+const NAV_NODES = Object.fromEntries(ACTIVE_MISSION.enemies.navigation.nodes.map(node => {
+  const point = getMissionNavigationPoint(node);
+  if (!point) throw new Error(`Mission navigation node "${node.id}" has no valid position source.`);
+  return [node.id, scaleEnemyPoint(point)];
+}));
+
+const NAV_EDGES = ACTIVE_MISSION.enemies.navigation.edges.map(edge => [...edge]);
 
 function _pointHitsExpandedWall(x, y, radius = enemyRadius()) {
   const blockers = typeof getMovementBlockers === 'function' ? getMovementBlockers() : WALLS;
@@ -463,49 +458,7 @@ function buildPath(fromX, fromY, toX, toY) {
 //   proximityRadius: awareness bubble ??detects player regardless of facing, with delay
 //   patrolRoute:     array of patrol nodes; [] = static
 //   patrolSpeed:     px/frame during translation
-const INITIAL_ENEMIES = [
-  // Enemy 1 ??static upper-room sentry, offset from Enemy 3's cross-room patrol
-  {
-    x: 580, y: 100, angle: Math.PI, targetAngle: Math.PI,
-    archetype: 'melee',
-    visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
-    patrolSpeed: 1.5,
-    patrolRoute: [],
-  },
-  // Enemy 2 ??short center patrol nested inside Enemy 1's range
-  {
-    x: 500, y: 590, angle: 0, targetAngle: 0,
-    archetype: 'melee',
-    visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
-    patrolSpeed: 1.5,
-    patrolRoute: [
-      { x: 420, y: 590, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
-      { x: 580, y: 590, pauseFrames: 240, sweep: 0, sweepSpeed: 0 },
-    ],
-  },
-  // Enemy 3 ??cross-room patrol Room A ??Corridor ??Room BC, 180째 sweep at each end
-  {
-    x: 200, y: 229, angle: 0, targetAngle: 0,
-    archetype: 'shooter',
-    visionAngle: STANDARD_VISION, sightRange: Infinity, proximityRadius: 50,
-    patrolSpeed: 1.5,
-    shootingRange: 360,
-    shootingRangeTolerance: 40,
-    shotCooldownFrames: 75,
-    shotSpeed: 25,
-    aimSpreadRadians: 0.16,
-    patrolRoute: [
-      { x: 200, y: 229, pauseFrames: 60, sweep: Math.PI, sweepSpeed: 0.008 }, // Room A ??sweep then head east
-      { x: 409, y: 295, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room A gap
-      { x: 589, y: 229, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Corridor center
-      { x: 769, y: 210, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room BC gap
-      { x: 930, y: 229, pauseFrames: 60, sweep: Math.PI, sweepSpeed: 0.008 }, // Room BC ??sweep then head west
-      { x: 769, y: 210, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room BC gap (return)
-      { x: 589, y: 229, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Corridor center (return)
-      { x: 409, y: 295, pauseFrames: 0,  sweep: 0,       sweepSpeed: 0     }, // Room A gap (return)
-    ],
-  },
-].map(scaleEnemyConfig);
+const INITIAL_ENEMIES = ACTIVE_MISSION.enemies.spawns.map(scaleEnemyConfig);
 
 let enemies      = [];
 let enemyProjectiles = [];
@@ -539,7 +492,7 @@ function resetEnemies() {
   enemies = INITIAL_ENEMIES.map((e, i) => ({
     ...e,
     index:              i + 1, // 1-based debug label
-    projectileTargetId: `enemy_${i + 1}`,
+    projectileTargetId: e.id ?? `enemy_${i + 1}`,
     state:              'patrol',
     alertTimer:         0,
     suspicionTimer:     0,
@@ -548,6 +501,8 @@ function resetEnemies() {
     alertEpisode:       0,
     alertReason:        null,
     currentIncident:    null,
+    alertTargetIncidentId: null,
+    alertTargetSlot:    null,
     companionAssignment: null,
     playerVisibleThisFrame: false,
     observedCorpses:    new Set(),
@@ -585,7 +540,7 @@ function resetEnemies() {
     alive:              true,
     hitFlashTimer:      0,
     meleeCooldownTimer: 0,
-    lastKnownX:         null, // player position at last confirmed sighting (null = never seen)
+    lastKnownX:         null, // active alert/search destination: direct sight or inferred approach point
     lastKnownY:         null,
     searchPath:         [],   // nav waypoints to lastKnown position
     searchPathIndex:    0,
@@ -875,6 +830,70 @@ function getSuspicionCaseSearchPoint(e, incident, slot) {
     ?? { x: incident.x, y: incident.y };
 }
 
+function getAlertTargetSlotPoint(sourceX, sourceY, slot) {
+  if (slot <= 0) return { x: sourceX, y: sourceY };
+
+  const positionsPerRing = 6;
+  const ring = Math.ceil(slot / positionsPerRing);
+  const position = (slot - 1) % positionsPerRing;
+  const spacing = enemyRadius() * 2 + scaleEnemyUnit(8);
+  const angle = position * (Math.PI * 2 / positionsPerRing) +
+    (ring % 2 === 0 ? Math.PI / positionsPerRing : 0);
+  return {
+    x: sourceX + Math.cos(angle) * spacing * ring,
+    y: sourceY + Math.sin(angle) * spacing * ring,
+  };
+}
+
+function assignEnemyAlertTarget(e, incident, sourceX, sourceY, confirmedPlayer = false, reason = incident?.reason) {
+  if (confirmedPlayer || reason === 'player' || !incident?.id) {
+    e.alertTargetIncidentId = null;
+    e.alertTargetSlot = null;
+    return { x: sourceX, y: sourceY };
+  }
+
+  let slot = e.alertTargetIncidentId === incident.id ? e.alertTargetSlot : null;
+  if (slot !== null && slot !== undefined) {
+    const reservedPoint = getAlertTargetSlotPoint(sourceX, sourceY, slot);
+    if (_pointHitsExpandedWall(reservedPoint.x, reservedPoint.y, enemyRadius() * 0.75)) slot = null;
+  }
+  if (slot === null || slot === undefined) {
+    const usedSlots = new Set();
+    for (const other of enemies) {
+      if (other !== e && other.alive !== false && other.alertTargetIncidentId === incident.id &&
+          other.alertTargetSlot !== null && other.alertTargetSlot !== undefined) {
+        usedSlots.add(other.alertTargetSlot);
+      }
+    }
+
+    const candidateCount = Math.max(24, enemies.length * 4);
+    let bestSlot = null;
+    let bestScore = Infinity;
+    for (let candidateSlot = 0; candidateSlot < candidateCount; candidateSlot++) {
+      if (usedSlots.has(candidateSlot)) continue;
+      const point = getAlertTargetSlotPoint(sourceX, sourceY, candidateSlot);
+      if (_pointHitsExpandedWall(point.x, point.y, enemyRadius() * 0.75)) continue;
+      const sourceOffset = Math.hypot(point.x - sourceX, point.y - sourceY);
+      const score = Math.hypot(point.x - e.x, point.y - e.y) + sourceOffset * 2;
+      if (score < bestScore) {
+        bestScore = score;
+        bestSlot = candidateSlot;
+      }
+    }
+    slot = bestSlot;
+  }
+
+  if (slot === null || slot === undefined) {
+    e.alertTargetIncidentId = null;
+    e.alertTargetSlot = null;
+    return { x: sourceX, y: sourceY };
+  }
+
+  e.alertTargetIncidentId = incident.id;
+  e.alertTargetSlot = slot;
+  return getAlertTargetSlotPoint(sourceX, sourceY, slot);
+}
+
 function markSuspicionCaseEscalated(e) {
   const caseId = e.suspicionCaseId ?? e.currentIncident?.caseId;
   if (!caseId) return;
@@ -942,16 +961,24 @@ function refineEnemyIncident(e, incident, reason = incident?.reason) {
     const incomingPriority = incident.priority ?? enemyAlertReasonPriority(reason);
     e.currentIncident = { ...incident };
     e.alertReason = reason;
-    e.lastKnownX = incident.x;
-    e.lastKnownY = incident.y;
-    e.targetAngle = Math.atan2(incident.x - e.x, -(incident.y - e.y));
+    const target = assignEnemyAlertTarget(
+      e,
+      incident,
+      incident.x,
+      incident.y,
+      incident.confirmedPlayer === true,
+      reason
+    );
+    e.lastKnownX = target.x;
+    e.lastKnownY = target.y;
+    e.targetAngle = Math.atan2(target.x - e.x, -(target.y - e.y));
     if (incomingPriority > previousPriority) {
       e.doorInvestigation = null;
       e.damagedDoorInvestigation = null;
       e.alertDoorTransit = null;
       e.companionAssignment = null;
     }
-    e.searchPath = buildPath(e.x, e.y, incident.x, incident.y);
+    e.searchPath = buildPath(e.x, e.y, target.x, target.y);
     e.searchPathIndex = 0;
     return true;
   }
@@ -1024,12 +1051,20 @@ function enterEnemyAlert(e, targetX, targetY, confirmedPlayer = false, reason = 
     e.damagedDoorInvestigation = null;
     e.alertDoorTransit = null;
     e.suspicionReason = null;
-    e.lastKnownX = targetX;
-    e.lastKnownY = targetY;
     e.alertReason = reason;
     e.currentIncident = { ...incomingIncident, x: targetX, y: targetY };
+    const alertTarget = assignEnemyAlertTarget(
+      e,
+      e.currentIncident,
+      targetX,
+      targetY,
+      confirmedPlayer,
+      reason
+    );
+    e.lastKnownX = alertTarget.x;
+    e.lastKnownY = alertTarget.y;
     rememberEnemyIncident(e, e.currentIncident);
-    e.targetAngle = Math.atan2(targetX - e.x, -(targetY - e.y));
+    e.targetAngle = Math.atan2(alertTarget.x - e.x, -(alertTarget.y - e.y));
     e.playerVisibleThisFrame = confirmedPlayer;
     if (options.fromCompanion === true) {
       e.companionAssignment = {
@@ -2252,7 +2287,7 @@ function updateAlertDoorTransit(e) {
 
 function resolveEnemySeparation() {
   const radius = enemyRadius();
-  const minimumDistance = radius * 2;
+  const minimumDistance = radius * 2 + scaleEnemyUnit(6);
   const minimumDistanceSq = minimumDistance * minimumDistance;
 
   for (let pass = 0; pass < 8; pass++) {
@@ -2292,6 +2327,46 @@ function resolveEnemySeparation() {
       }
     }
     if (!foundOverlap) break;
+  }
+}
+
+function orientCrowdedEnemiesApart() {
+  const personalDistance = enemyRadius() * 2 + scaleEnemyUnit(14);
+  const personalDistanceSq = personalDistance * personalDistance;
+  const avoidance = enemies.map(() => ({ x: 0, y: 0, count: 0 }));
+
+  for (let i = 0; i < enemies.length; i++) {
+    const a = enemies[i];
+    if (a.alive === false) continue;
+    for (let j = i + 1; j < enemies.length; j++) {
+      const b = enemies[j];
+      if (b.alive === false) continue;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const distanceSq = dx * dx + dy * dy;
+      if (distanceSq >= personalDistanceSq) continue;
+      const distance = Math.sqrt(distanceSq);
+      if (distance < 0.0001) {
+        const angle = ((i + 1) * 2.399963229728653 + (j + 1) * 0.7548776662466927) % (Math.PI * 2);
+        dx = Math.cos(angle);
+        dy = Math.sin(angle);
+      } else {
+        dx /= distance;
+        dy /= distance;
+      }
+      avoidance[i].x -= dx;
+      avoidance[i].y -= dy;
+      avoidance[i].count++;
+      avoidance[j].x += dx;
+      avoidance[j].y += dy;
+      avoidance[j].count++;
+    }
+  }
+
+  for (let i = 0; i < enemies.length; i++) {
+    const vector = avoidance[i];
+    if (vector.count === 0 || vector.x * vector.x + vector.y * vector.y < 0.0001) continue;
+    enemies[i].angle = Math.atan2(vector.x, -vector.y);
   }
 }
 
@@ -2574,6 +2649,7 @@ function updateEnemies() {
   }
 
   resolveEnemySeparation();
+  orientCrowdedEnemiesApart();
 }
 
 function drawPlayerHitFlash() {

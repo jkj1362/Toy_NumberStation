@@ -142,7 +142,7 @@ The sequence is:
 
 Door-crossing waypoints use the ordinary close arrival radius rather than the wider doorway-navigation tolerance. The far-side point is placed beyond the complete swung-panel length, and the crossing lane stays toward the unhinged side of the aperture. This prevents an investigator from treating the doorway center as its destination or sweeping in the panel's shadow. General pursuit/search navigation adds temporary clearance nodes around open panel corners so guards route around the panel instead of repeatedly pushing into it.
 
-Living enemies resolve mutual body separation after movement. Overlapping guards share the displacement, reapply wall/door collision, and iterate until their centers retain at least two enemy radii of spacing, including when multiple guards converge on the same investigation point.
+Living enemies resolve mutual body separation after movement. Overlapping guards share the displacement, reapply wall/door collision, and iterate until their centers retain at least two enemy radii of spacing. When several alerted guards act on the same inferred evidence location, they reserve stable nearby approach slots instead of repeatedly walking into one exact coordinate; the shared incident location and provenance remain unchanged. Direct player sight still uses the exact observed player position.
 
 If the door is opened by someone else before the enemy reaches it, the enemy may continue through it but does not claim ownership and therefore does not close it. If the door is destroyed during the investigation, the enemy continues or returns without attempting to close it.
 
@@ -193,6 +193,8 @@ Feature 13 remains strictly local. Feature 16 owns facility-wide readiness and s
 - Implemented: gunshot audio uses one source-neutral reaction path for player and enemy shooters; only the shooter itself is excluded from reacting to its own sound. Actor penetration still emits no extra ballistic-impact stimulus.
 - Implemented: suspicion cases retain a maximum four-person active investigation roster. The originator and up to three companion recruits use distributed search positions; additional direct perceivers remain suspicious support instead of converging, and unchanged companion relays cannot open new slots.
 - Implemented: suspicious members accept distinct case evidence and strict information improvements without adding suspicion/confirmation. Alert propagation remains numerically uncapped through actual visual observation, while already-alerted receivers adopt only higher-priority or strictly better information.
+- Implemented: guards alerted by the same inferred incident reserve deterministic, wall-aware approach slots around its fixed location. This prevents movement/separation cancellation and post-gunshot position vibration without changing shared knowledge or direct-sight pursuit.
+- Implemented: living guards retain a small visible personal-space buffer during separation. When two or more guards enter the close-contact zone, their rendered facing turns away from the local crowd vector instead of leaving them nose-to-nose; their underlying patrol, investigation, or combat target remains unchanged.
 - Ongoing: playtest tuning and bug fixing for local reaction frequency, timing, movement, and suspicion accumulation.
 - Moved to Feature 16: explicit facility-wide alert/search escalation.
 
@@ -271,7 +273,8 @@ Feature 13 ends at locally perceived or locally relayed incidents. Feature 16 wi
 - A muffled sound through a closed connecting door produces the complete suspicious door-investigation sequence.
 - After opening an investigation door, the guard crosses fully to the intended room-side waypoint before beginning its sweep; it does not stop at the doorway because of the wider navigation-gap tolerance.
 - Suspicious, searching, and alerted movement routes around an intact open panel rather than repeatedly colliding with it, and door investigations sweep from open room space beyond the panel's full reach.
-- Living enemies never remain overlapped when moving or sharing a destination; they separate and compromise their final positions without entering blocking geometry.
+- Living enemies never remain overlapped when moving toward shared evidence. Alerted guards use stable non-overlapping approach slots, settle without repeated position vibration, and preserve the incident's original inferred location separately from their physical destinations.
+- Guards that meet or cross at close range preserve visible personal space and do not remain facing directly into one another.
 - An unsuccessful door investigation restores the interrupted patrol position, facing, waypoint, pause, and sweep progress.
 - The investigator closes only an intact door that it opened for that investigation.
 - Seeing the player during any evidence or door reaction immediately transfers to normal player-confirmed alert behavior.

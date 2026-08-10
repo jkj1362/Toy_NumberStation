@@ -1,6 +1,6 @@
 # Feature 16 - Facility Alert and Escalation
 
-**Status: Planned after Feature 15A mission-data separation.**
+**Status: Deferred until after Feature 15B produces larger seeded facilities with enough rooms and enemies to validate facility-level behavior.**
 
 Feature 16 is the explicit mission-level escalation layer. It converts locally grounded incidents into broader facility readiness and search behavior without turning guards into an omniscient hive mind.
 
@@ -14,7 +14,7 @@ Allow serious or accumulating evidence to change the facility's overall security
 - **Feature 14:** supplies stable ballistic `shotId` events and destruction/penetration evidence without double-counting one projectile.
 - **Feature 15A:** supplies normalized room IDs, connector IDs, navigation topology, sound portals, and the reference mission boundary.
 
-Feature 15B procedural generation begins only after this system works against the normalized reference mission.
+Feature 15B procedural generation now precedes this system. Feature 16 will consume the same normalized contract after it has been exercised by both the reference mission and larger generated facilities.
 
 ## Ownership Boundary
 

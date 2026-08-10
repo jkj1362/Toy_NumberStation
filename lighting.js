@@ -100,7 +100,7 @@ function initLighting(missionLighting) {
   }));
   lightingLamps = (missionLighting.lamps ?? []).map((lamp, index) => ({
     ...scaleLightingLamp(lamp),
-    projectileTargetId: `lamp_${index + 1}`,
+    projectileTargetId: lamp.id ?? `lamp_${index + 1}`,
   }));
   for (const lamp of lightingLamps) {
     lamp.visibilityPolygon = computeLampVisibilityPolygon(lamp);

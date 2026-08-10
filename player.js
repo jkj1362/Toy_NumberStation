@@ -1,7 +1,7 @@
-const PLAYER_DESIGN_WIDTH = 1100;
-const PLAYER_DESIGN_HEIGHT = 750;
-const PLAYER_GAME_WIDTH = 3200;
-const PLAYER_GAME_HEIGHT = 1800;
+const PLAYER_DESIGN_WIDTH = ACTIVE_MISSION.world.designWidth;
+const PLAYER_DESIGN_HEIGHT = ACTIVE_MISSION.world.designHeight;
+const PLAYER_GAME_WIDTH = ACTIVE_MISSION.world.width;
+const PLAYER_GAME_HEIGHT = ACTIVE_MISSION.world.height;
 const PLAYER_SCALE_X = PLAYER_GAME_WIDTH / PLAYER_DESIGN_WIDTH;
 const PLAYER_SCALE_Y = PLAYER_GAME_HEIGHT / PLAYER_DESIGN_HEIGHT;
 const PLAYER_SCALE_UNIT = (PLAYER_SCALE_X + PLAYER_SCALE_Y) / 2;
@@ -13,7 +13,7 @@ function scalePlayerPoint(p) {
   return { ...p, x: scalePlayerX(p.x), y: scalePlayerY(p.y) };
 }
 
-const PLAYER_START = scalePlayerPoint({ x: 500, y: 680 });
+const PLAYER_START = scalePlayerPoint(ACTIVE_MISSION.player.start);
 
 // Player movement tuning. These design-space values are intentionally centralized
 // so sneak/walk/sprint feel and noise can be adjusted without touching input logic.

@@ -42,26 +42,34 @@ function showSoundAttenuationDebug() { return typeof isDebugOverlayEnabled === '
 function showSoundAllPathDebug() { return typeof isDebugOverlayEnabled === 'function' ? isDebugOverlayEnabled('debugSoundAllPaths') : SHOW_SOUND_ALL_PATH_DEBUG; }
 function soundDoorDetourRatio() { return typeof getTuningNumber === 'function' ? getTuningNumber('soundDoorDetourRatio', 1.5) : 1.5; }
 
-const SOUND_ROOM_SPECS = [
-  { id: 'lobby',    x: 460, y: 590 },
-  { id: 'room_a',   x: 200, y: 229 },
-  { id: 'corridor', x: 589, y: 229 },
-  { id: 'room_bc',  x: 930, y: 229 },
-  { id: 'room_f',   x: 991, y: 590 },
-].map(room => ({ ...room, x: scaleEnemyX(room.x), y: scaleEnemyY(room.y) }));
+const SOUND_ROOM_SPECS = ACTIVE_MISSION.sound.rooms.map(roomId => {
+  const room = ACTIVE_MISSION.rooms.find(item => item.id === roomId);
+  return {
+    id: room.id,
+    x: scaleEnemyX(room.center.x),
+    y: scaleEnemyY(room.center.y),
+    bounds: {
+      ...room.bounds,
+      x: scaleEnemyX(room.bounds.x),
+      y: scaleEnemyY(room.bounds.y),
+      w: scaleEnemyX(room.bounds.w),
+      h: scaleEnemyY(room.bounds.h),
+    },
+  };
+});
 
-const SOUND_UPPER_ROOM_BOUNDARY_Y = scaleEnemyY(449);
-const SOUND_ROOM_A_BOUNDARY_X = scaleEnemyX(409);
-const SOUND_ROOM_BC_BOUNDARY_X = scaleEnemyX(769);
-const SOUND_ROOM_F_BOUNDARY_X = scaleEnemyX(909);
-
-const SOUND_PORTAL_SPECS = [
-  { a: 'lobby',    b: 'corridor', doorId: 'corridor_left_door',    x: 270, y: 449 },
-  { a: 'lobby',    b: 'corridor', doorId: 'corridor_right_door',   x: 819, y: 449 },
-  { a: 'room_a',   b: 'corridor', doorId: 'room_a_east_door',      x: 409, y: 295 },
-  { a: 'corridor', b: 'room_bc',  doorId: 'room_bc_divider_door',  x: 769, y: 210 },
-  { a: 'lobby',    b: 'room_f',   doorId: 'room_f_west_door',      x: 909, y: 590 },
-].map(portal => ({ ...portal, x: scaleEnemyX(portal.x), y: scaleEnemyY(portal.y) }));
+const SOUND_PORTAL_SPECS = ACTIVE_MISSION.sound.portals.map(connectorId => {
+  const connector = ACTIVE_MISSION.connectors.find(item => item.id === connectorId);
+  return {
+    id: connector.id,
+    connectorId: connector.id,
+    a: connector.rooms[0],
+    b: connector.rooms[1],
+    doorId: connector.doorId,
+    x: scaleEnemyX(connector.position.x),
+    y: scaleEnemyY(connector.position.y),
+  };
+});
 
 let soundEvents = [];
 let soundAttenuationEvents = [];
@@ -162,15 +170,26 @@ function getDoorSoundTransmission(doorId) {
 }
 
 function findSoundRoomAt(x, y) {
-  let roomId;
-  if (y < SOUND_UPPER_ROOM_BOUNDARY_Y) {
-    if (x < SOUND_ROOM_A_BOUNDARY_X) roomId = 'room_a';
-    else if (x > SOUND_ROOM_BC_BOUNDARY_X) roomId = 'room_bc';
-    else roomId = 'corridor';
-  } else {
-    roomId = x > SOUND_ROOM_F_BOUNDARY_X ? 'room_f' : 'lobby';
+  for (const room of SOUND_ROOM_SPECS) {
+    const bounds = room.bounds;
+    const aboveMinX = bounds.minXExclusive ? x > bounds.x : x >= bounds.x;
+    const belowMaxX = bounds.maxXInclusive ? x <= bounds.x + bounds.w : x < bounds.x + bounds.w;
+    const aboveMinY = bounds.minYExclusive ? y > bounds.y : y >= bounds.y;
+    const belowMaxY = bounds.maxYInclusive ? y <= bounds.y + bounds.h : y < bounds.y + bounds.h;
+    if (aboveMinX && belowMaxX && aboveMinY && belowMaxY) return room;
   }
-  return getSoundRoom(roomId);
+  let closest = null;
+  let closestDistance = Infinity;
+  for (const room of SOUND_ROOM_SPECS) {
+    const dx = room.x - x;
+    const dy = room.y - y;
+    const distance = dx * dx + dy * dy;
+    if (distance < closestDistance) {
+      closest = room;
+      closestDistance = distance;
+    }
+  }
+  return closest;
 }
 
 function getPortalNeighbors(roomId) {

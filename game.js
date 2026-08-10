@@ -1,10 +1,10 @@
 const canvas = document.getElementById('game');
 const screenCtx = canvas.getContext('2d');
 
-const DESIGN_WIDTH = 1100;
-const DESIGN_HEIGHT = 750;
-const GAME_WIDTH = 3200;
-const GAME_HEIGHT = 1800;
+const DESIGN_WIDTH = ACTIVE_MISSION.world.designWidth;
+const DESIGN_HEIGHT = ACTIVE_MISSION.world.designHeight;
+const GAME_WIDTH = ACTIVE_MISSION.world.width;
+const GAME_HEIGHT = ACTIVE_MISSION.world.height;
 const GAME_SCALE_X = GAME_WIDTH / DESIGN_WIDTH;
 const GAME_SCALE_Y = GAME_HEIGHT / DESIGN_HEIGHT;
 const GAME_SCALE_UNIT = (GAME_SCALE_X + GAME_SCALE_Y) / 2;
@@ -29,85 +29,29 @@ function scaleGamePoint(p) {
   return { ...p, x: scaleGameX(p.x), y: scaleGameY(p.y) };
 }
 
-const WALLS = [
-  // Outer perimeter - entry gap x:430-570 at bottom
-  { x:    0, y:   0, w: 1100, h:  18 },
-  { x:    0, y: 732, w:  430, h:  18 },
-  { x:  570, y: 732, w:  530, h:  18 },
-  { x:    0, y:   0, w:   18, h: 160 }, // left perimeter - gap y:160-220 (duct, Room A)
-  { x:    0, y: 220, w:   18, h: 530 },
-  { x: 1082, y:   0, w:   18, h: 160 }, // right perimeter - gap y:160-220 (duct, Room B/C)
-  { x: 1082, y: 220, w:   18, h: 530 },
-  // Corridor wall at y=440 - left gap x:220-320, right gap x:778-860
-  // Center extends to x=778 (not x=760) to close corner with Room B/C divider
-  { x:   18, y: 440, w:  202, h:  18 },
-  { x:  320, y: 440, w:  458, h:  18 },
-  { x:  860, y: 440, w:  222, h:  18 },
-  // Room A (objective) east wall at x=400 - gap y:250-340
-  { x:  400, y:  18, w:  18, h: 232 },
-  { x:  400, y: 340, w:  18, h: 100 },
-  // Room B/C divider at x=760 - gap y:160-260
-  { x:  760, y:  18, w:  18, h: 142 },
-  { x:  760, y: 260, w:  18, h: 180 },
-  // Room F (guard) west wall at x=900 - gap y:540-640
-  // x=900 is within corridor right (x=860-1082) so top connects cleanly
-  { x:  900, y: 440, w:  18, h: 100 },
-  { x:  900, y: 640, w:  18, h:  92 },
-].map((wall, index) => ({
+const WALLS = ACTIVE_MISSION.geometry.walls.map(wall => ({
   ...scaleGameRect(wall),
-  geometryId: `wall_${index}`,
+  geometryId: wall.id,
   geometryType: 'wall',
   destructible: false,
   projectileBehavior: 'block',
 }));
 
-const DOOR_SPECS = [
-  {
-    id: 'corridor_left_door',
-    x: 220, y: 446, w: 100, h: 6,
-    orientation: 'horizontal',
-    material: 'wood',
-    apertureIds: ['corridor_left_door_n', 'corridor_left_door_s'],
-  },
-  {
-    id: 'corridor_right_door',
-    x: 778, y: 446, w: 82, h: 6,
-    orientation: 'horizontal',
-    material: 'wood',
-    apertureIds: ['corridor_right_door_n', 'corridor_right_door_s'],
-  },
-  {
-    id: 'room_a_east_door',
-    x: 406, y: 250, w: 6, h: 90,
-    orientation: 'vertical',
-    material: 'wood',
-    apertureIds: ['room_a_east_door_e', 'room_a_east_door_w'],
-  },
-  {
-    id: 'room_bc_divider_door',
-    x: 766, y: 160, w: 6, h: 100,
-    orientation: 'vertical',
-    material: 'wood',
-    apertureIds: ['room_bc_divider_door_e', 'room_bc_divider_door_w'],
-  },
-  {
-    id: 'room_f_west_door',
-    x: 900, y: 540, w: 18, h: 100,
-    orientation: 'vertical',
-    material: 'metal',
-    apertureIds: ['room_f_west_door_e', 'room_f_west_door_w'],
-  },
-];
+const DOOR_SPECS = ACTIVE_MISSION.doors.map(door => {
+  const connector = ACTIVE_MISSION.connectors.find(item => item.id === door.connectorId);
+  return { ...door, apertureIds: [...connector.apertureIds] };
+});
 
 const DOORS = DOOR_SPECS.map((door) => ({
   ...scaleGameRect(door),
   id: door.id,
+  connectorId: door.connectorId,
   orientation: door.orientation,
   material: door.material,
   geometryId: door.id,
   geometryType: 'door',
   state: 'closed',
-  defaultState: 'closed',
+  defaultState: door.defaultState,
   openedBy: null,
   closingActor: null,
   closingSide: 0,
@@ -120,34 +64,25 @@ const DOORS = DOOR_SPECS.map((door) => ({
   hp: door.material === 'metal' ? null : doorMaxHp(),
   maxHp: door.material === 'metal' ? null : doorMaxHp(),
   soundTransmission: doorSoundTransmission(),
-  apertureIds: door.apertureIds,
+  apertureIds: [...door.apertureIds],
 }));
 
-const WINDOW_SPECS = [
-  {
-    id: 'room_a_west_window',
-    x: 7.5, y: 160, w: 3, h: 60,
-    orientation: 'vertical',
-    apertureIds: ['room_a_west_window_moonlight'],
-  },
-  {
-    id: 'room_bc_east_window',
-    x: 1089.5, y: 160, w: 3, h: 60,
-    orientation: 'vertical',
-    apertureIds: ['room_bc_east_window_moonlight'],
-  },
-];
+const WINDOW_SPECS = ACTIVE_MISSION.windows.map(windowSpec => {
+  const connector = ACTIVE_MISSION.connectors.find(item => item.id === windowSpec.connectorId);
+  return { ...windowSpec, apertureIds: [...connector.apertureIds] };
+});
 
 const WINDOWS = WINDOW_SPECS.map((windowSpec) => ({
   ...scaleGameRect(windowSpec),
   id: windowSpec.id,
+  connectorId: windowSpec.connectorId,
   orientation: windowSpec.orientation,
-  apertureIds: windowSpec.apertureIds,
-  material: 'glass',
+  apertureIds: [...windowSpec.apertureIds],
+  material: windowSpec.material,
   geometryId: windowSpec.id,
   geometryType: 'window',
   state: 'intact',
-  defaultState: 'intact',
+  defaultState: windowSpec.defaultState,
   destructible: true,
   projectileBehavior: 'penetrate',
   penetrationResistance: windowProjectileResistance(),
@@ -203,67 +138,20 @@ function measurePerf(key, fn) {
   return result;
 }
 
-const DOOR_LIGHT_APERTURE = {
-  range: 320,
-  intensity: 0.62,
-  falloffPower: 0.7,
-  spreadRadians: 1.1,
-};
-
-const ROOM_LAMP_LIGHT = {
-  radius: 900,
-  intensity: 1.0,
-  falloffPower: 1.45,
-};
-
-
-const MISSION_LIGHTING = {
-  globalAmbient: 0.0,
-  externalLightAvailable: true,
-  zones: [
-    { id: 'lobby_lamp_spill', x: 320, y: 458, w: 380, h: 170, ambient: 0.10 },
-    { id: 'entry_dim_spill', x: 430, y: 640, w: 140, h: 92, ambient: 0.08 },
-    { id: 'corridor_left_threshold_spill', x: 220, y: 430, w: 100, h: 44, ambient: 0.06 },
-    { id: 'corridor_right_threshold_spill', x: 778, y: 430, w: 82, h: 44, ambient: 0.06 },
-  ],
-  lamps: [
-    { x: 200, y:  18, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 580, y:  18, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 920, y:  18, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 200, y: 440, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 580, y: 440, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 920, y: 440, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 350, y: 458, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 700, y: 458, wallSide: 'N', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 350, y: 732, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x: 700, y: 732, wallSide: 'S', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x:  18, y: 630, wallSide: 'W', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-    { x:1082, y: 590, wallSide: 'E', ...ROOM_LAMP_LIGHT, color: '#ffdc96', active: true },
-  ],
-  apertures: [
-    { id: 'room_a_west_window_moonlight', kind: 'window', x: 18, y: 190, direction: 'E', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true, requiresExternalLight: true },
-    { id: 'room_bc_east_window_moonlight', kind: 'window', x: 1082, y: 190, direction: 'W', width: 70, range: 360, intensity: 0.24, falloffPower: 1.05, spreadRadians: 0.95, open: true, requiresExternalLight: true },
-    { id: 'corridor_left_door_n', kind: 'door', x: 270, y: 440, direction: 'N', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'corridor_left_door_s', kind: 'door', x: 270, y: 458, direction: 'S', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'corridor_right_door_n', kind: 'door', x: 819, y: 440, direction: 'N', width: 82, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'corridor_right_door_s', kind: 'door', x: 819, y: 458, direction: 'S', width: 82, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'room_a_east_door_e', kind: 'door', x: 418, y: 295, direction: 'E', width: 90, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'room_a_east_door_w', kind: 'door', x: 400, y: 295, direction: 'W', width: 90, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'room_bc_divider_door_e', kind: 'door', x: 778, y: 210, direction: 'E', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'room_bc_divider_door_w', kind: 'door', x: 760, y: 210, direction: 'W', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'room_f_west_door_e', kind: 'door', x: 918, y: 590, direction: 'E', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
-    { id: 'room_f_west_door_w', kind: 'door', x: 900, y: 590, direction: 'W', width: 100, ...DOOR_LIGHT_APERTURE, open: false },
-  ],
-};
-
 // Lamp placement gives each room at least one fixture. Range/falloff, not spacing alone,
 // now controls whether intact rooms are broadly lit or leave exploitable dark gaps.
 
 // Wall duct/window exits - manually activated bonus exfil points
-const WALL_GAP_EXITS = [
-  { x:    9, y: 190, roomId: 'room_a',  windowId: 'room_a_west_window',  activated: false },
-  { x: 1091, y: 190, roomId: 'room_bc', windowId: 'room_bc_east_window', activated: false },
-].map(scaleGamePoint);
+const WALL_GAP_EXITS = ACTIVE_MISSION.geometry.wallGapExits.map(exit => {
+  const connector = ACTIVE_MISSION.connectors.find(item => item.id === exit.connectorId);
+  return scaleGamePoint({
+    ...exit,
+    x: connector.position.x,
+    y: connector.position.y,
+    roomId: connector.rooms.find(roomId => roomId !== 'exterior'),
+    windowId: connector.windowId,
+  });
+});
 let gapExits = WALL_GAP_EXITS.map(g => ({ ...g }));
 
 const INTERACT_RADIUS = scaleGameUnit(30);
@@ -529,13 +417,12 @@ function rebuildRayGeometryIfNeeded() {
 }
 
 // Room centers used for random pickup / exfil placement
-const ROOMS = [
-  { id: 'lobby',    cx: 460, cy: 590, startingSpace: true  },
-  { id: 'room_a',   cx: 200, cy: 229, startingSpace: false },
-  { id: 'corridor', cx: 589, cy: 229, startingSpace: false },
-  { id: 'room_bc',  cx: 930, cy: 229, startingSpace: false },
-  { id: 'room_f',   cx: 991, cy: 590, startingSpace: false },
-].map(room => ({ ...room, cx: scaleGameX(room.cx), cy: scaleGameY(room.cy) }));
+const ROOMS = ACTIVE_MISSION.rooms.map(room => ({
+  id: room.id,
+  cx: scaleGameX(room.center.x),
+  cy: scaleGameY(room.center.y),
+  startingSpace: room.startingSpace,
+}));
 
 // Mission state
 let pickup          = { x: 0, y: 0, roomId: '', collected: false, visibleToPlayer: false };
@@ -932,8 +819,10 @@ function isLitByLamps(wx, wy) {
 }
 
 function initPickup() {
-  const eligible = ROOMS.filter(r => !r.startingSpace);
-  const room = eligible[Math.floor(Math.random() * eligible.length)];
+  const pickupRule = ACTIVE_MISSION.objective.pickupRule;
+  const eligible = ROOMS.filter(room => !pickupRule.excludeStartingSpaces || !room.startingSpace);
+  const room = ROOMS.find(item => item.id === pickupRule.pickupRoomId) ??
+    eligible[Math.floor(Math.random() * eligible.length)];
   pickup.x = room.cx;
   pickup.y = room.cy;
   pickup.roomId = room.id;
@@ -944,7 +833,14 @@ function initPickup() {
 
 function initExfil() {
   exfilPoints.length = 0;
-  exfilPoints.push(scaleGamePoint({ x: 500, y: 741, type: 'primary', active: false, discovered: true }));
+  for (const exfil of ACTIVE_MISSION.objective.exfilPoints) {
+    const connector = ACTIVE_MISSION.connectors.find(item => item.id === exfil.connectorId);
+    exfilPoints.push(scaleGamePoint({
+      ...exfil,
+      x: connector.position.x,
+      y: connector.position.y,
+    }));
+  }
 }
 
 function pushOutOfWalls(entity, radius) {
@@ -1374,6 +1270,7 @@ function update() {
   const hardAimHeld = input.hardAimHeld;
 
   if (input.resetPressed) {
+    if (gamePhase === 'gameover' && CURRENT_RUN.generated && restartWithNewRun()) return;
     reset();
     return;
   }
@@ -1878,6 +1775,7 @@ function drawPerfOverlay() {
   if (!showPerfOverlay()) return;
 
   const lines = [
+    `seed ${CURRENT_RUN.seed ?? 'reference'}`,
     `FPS ${perf.fps.toFixed(1)} | steps ${perf.simSteps}`,
     `update ${perf.updateMs.toFixed(2)} ms`,
     `draw ${perf.drawMs.toFixed(2)} ms`,
@@ -1891,7 +1789,7 @@ function drawPerfOverlay() {
   screenCtx.font = '16px monospace';
   screenCtx.textBaseline = 'top';
   screenCtx.fillStyle = 'rgba(0,0,0,0.72)';
-  screenCtx.fillRect(10, 10, 230, 132);
+  screenCtx.fillRect(10, 10, 310, 24 + lines.length * 18);
   screenCtx.fillStyle = '#d8f6ff';
   for (let i = 0; i < lines.length; i++) {
     screenCtx.fillText(lines[i], 20, 18 + i * 18);
@@ -1937,7 +1835,13 @@ function drawGamePhaseOverlay() {
   screenCtx.fillText('MISSION FAILED', canvas.width / 2, canvas.height / 2 - 34);
   screenCtx.fillStyle = '#d8f6ff';
   screenCtx.font = '24px monospace';
-  screenCtx.fillText('Press ] or gamepad B to reset', canvas.width / 2, canvas.height / 2 + 34);
+  screenCtx.fillText(
+    CURRENT_RUN.generated
+      ? 'Press ] or gamepad B to start a new seeded run'
+      : 'Press ] or gamepad B to reset',
+    canvas.width / 2,
+    canvas.height / 2 + 34,
+  );
   screenCtx.restore();
 }
 
@@ -2029,7 +1933,7 @@ window.addEventListener('tuningchange', (event) => {
   }
 });
 
-initLighting(MISSION_LIGHTING);
+initLighting(ACTIVE_MISSION.lighting);
 resetDoors();
 resetWindows();
 resetCamera();

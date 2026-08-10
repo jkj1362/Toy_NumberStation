@@ -1,8 +1,8 @@
 # Number Stations - Prototype 2 Scope
 
-**Status: Active prototype. Features 13 local reactions and 14 ballistics are implemented but still need regression/stability work. The remaining order is Feature 15A mission-data separation, Feature 16 facility escalation, then Feature 15B seeded generation.**
+**Status: Active prototype. Features 13 local reactions and 14 ballistics are implemented but still need regression/stability work. Features 15A mission-data separation and 15B seeded generation are implemented, with generated-mission gameplay/visual regression ongoing. Feature 16 remains deferred until the generated scale is accepted for facility-level escalation design.**
 
-Prototype 1 proved the core night-mission interaction feel. Prototype 2 now needs to stabilize local AI and ballistics, separate the current facility from gameplay logic, build facility-wide escalation against that normalized topology, and only then add seeded procedural mission generation.
+Prototype 1 proved the core night-mission interaction feel. Prototype 2 now needs to stabilize local AI and ballistics, generate larger seeded facilities through the normalized mission boundary, and then design facility-wide escalation at a scale that can exercise it meaningfully.
 
 ## Prototype 2 Goal
 
@@ -34,7 +34,7 @@ This remains important support work for Prototype 2:
 
 Execution order:
 
-`Feature 13 local reactions -> Feature 14 ballistics -> Feature 15A mission separation -> Feature 16 facility escalation -> Feature 15B seeded generation`
+`Feature 13 local reactions -> Feature 14 ballistics -> Feature 15A mission separation -> Feature 15B seeded generation -> Feature 16 facility escalation`
 
 ### 1. Feature 13 - Local AI Event Reactions and Body Discovery
 
@@ -99,25 +99,11 @@ Minimum shape:
 - Keep `resetGame()` on the same reference facility and restore all mutable state.
 - Add no procedural variation in this phase.
 
-### 4. Feature 16 - Facility Alert and Escalation
-
-Feature planning doc: `Operation guide/Feature planning/feature_16_facility_alert_escalation.md`.
-
-Build the mission-level alert layer after Feature 15A exposes reliable room and connector topology.
-
-Minimum shape:
-
-- Consume immutable, deduplicated incident snapshots from Feature 13/14.
-- Accumulate severe or repeated independent evidence into explicit facility alert levels.
-- Select affected connected rooms and distribute readiness/search work instead of sending every enemy to one coordinate.
-- Keep individual local knowledge authoritative. Facility state never broadcasts the hidden player's live position.
-- Provide explicit reset, decay, tuning, and debug visibility.
-
-### 5. Feature 15B - Seeded Procedural Runs
+### 4. Feature 15B - Seeded Procedural Runs
 
 Feature planning doc: `Operation guide/Feature planning/feature_15_seeded_mission_generation.md`.
 
-After Feature 16 works against the reference facility, add a seeded generator that produces the same normalized mission contract.
+Generate larger facilities through the same normalized mission contract before designing facility-wide escalation.
 
 Target direction:
 
@@ -127,7 +113,21 @@ Target direction:
 - Keep the reference mission as a deterministic regression fixture.
 - Generate geometry, lighting hooks, objective/exfil placement, enemy/nav data, and sound topology consistently from the same connector graph.
 
-The goal is not a full editor or production-scale variety. The goal is a reliable seed-to-mission proof using the same boundary already exercised by the reference facility and Feature 16.
+The goal is not a full editor or production-scale variety. The goal is a reliable seed-to-mission proof using the same boundary already exercised by the reference facility, with enough rooms and enemies to support later Feature 16 design.
+
+### 5. Feature 16 - Facility Alert and Escalation
+
+Feature planning doc: `Operation guide/Feature planning/feature_16_facility_alert_escalation.md`.
+
+Build the mission-level alert layer after Feature 15B supplies larger connected facilities.
+
+Minimum shape:
+
+- Consume immutable, deduplicated incident snapshots from Feature 13/14.
+- Accumulate severe or repeated independent evidence into explicit facility alert levels.
+- Select affected connected rooms and distribute readiness/search work instead of sending every enemy to one coordinate.
+- Keep individual local knowledge authoritative. Facility state never broadcasts the hidden player's live position.
+- Provide explicit reset, decay, tuning, and debug visibility.
 
 ## Deferred To Prototype 3 / Metagame-Aligned Work
 
@@ -166,10 +166,10 @@ These should remain deferred unless the project direction changes:
 | Done | Collapsible tuning/debug UI | Speeds up balancing and makes prototype overlays intentional. |
 | Implemented; stabilization ongoing | Feature 13 local AI reactions | Closes missed local stealth-reaction behavior without global knowledge. |
 | Implemented; regression pending | Feature 14 door ballistics core | Makes doors and windows part of stealth, sound, combat, and risk. |
-| **NEXT** | Feature 15A reference mission separation | Gives every later system one stable topology and data boundary without changing the map. |
-| P0 | Feature 16 facility alert/escalation | Turns deduplicated local incidents into connected-space readiness and search behavior. |
-| P1 | Feature 15B modular seeded generation | Verifies that generated structures can feed geometry, lighting, nav, enemies, sound, and escalation. |
-| P1 | Feature 15B run seed/death reset behavior | Keeps one generated level stable for a character and creates a new level after death. |
+| Done | Feature 15A reference mission separation | Gives every later system one stable topology and data boundary without changing the map. |
+| Implemented; regression pending | Feature 15B modular seeded generation | Generated structures now feed geometry, lighting, nav, enemies, sound, and later escalation through one contract. |
+| Implemented; regression pending | Feature 15B run seed/death reset behavior | One generated level remains stable for ordinary resets; death starts a new seeded run. |
+| Deferred until after 15B | Feature 16 facility alert/escalation | Needs a larger facility and guard population to validate connected-space readiness and search behavior. |
 | P2 | Minimal gear/tool placeholder | Only if needed to test doors or room generation; otherwise defer. |
 
 ## Success Criteria
