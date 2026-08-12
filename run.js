@@ -22,6 +22,7 @@ function getRequestedGenerationConfig() {
   if (typeof window === 'undefined' || typeof URLSearchParams !== 'function') return {};
   const params = new URLSearchParams(window.location?.search ?? '');
   const config = {};
+  if (params.has('profile')) config.profileId = params.get('profile');
   if (params.has('rows')) config.rows = params.get('rows');
   if (params.has('columns')) config.columns = params.get('columns');
   if (params.has('enemies')) config.enemyCount = params.get('enemies');

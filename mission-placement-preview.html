@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Irregular Facility Placement Preview</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #080b10;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+    }
+
+    canvas {
+      width: min(100vw, calc(100vh * 16 / 9));
+      height: min(100vh, calc(100vw * 9 / 16));
+      background: #10151d;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="preview" width="1600" height="900"></canvas>
+  <script>
+    window.addEventListener('error', event => {
+      document.documentElement.dataset.previewError = event.message;
+    });
+  </script>
+  <script src="mission.js"></script>
+  <script src="mission-generator.js"></script>
+  <script>
+    const canvas = document.getElementById('preview');
+    const context = canvas.getContext('2d');
+    const params = new URLSearchParams(window.location.search);
+    const seed = params.get('seed') || 'office-deterministic';
+    const topology = generateIrregularFacilityTopology(seed);
+    const placement = placeIrregularFacilitySpaces(topology);
+    const routing = routeIrregularFacilityConnections(topology, placement);
+    const structure = compileIrregularFacilityStructure(topology, placement, routing);
+    const mission = generateIrregularSeededMission(seed);
+    const spacesById = new Map(placement.spaces.map(space => [space.id, space]));
+    const padding = 52;
+    const headerHeight = 72;
+    const scale = Math.min(
+      (canvas.width - padding * 2) / placement.world.designWidth,
+      (canvas.height - headerHeight - padding) / placement.world.designHeight
+    );
+    const offsetX = (canvas.width - placement.world.designWidth * scale) / 2;
+    const offsetY = headerHeight +
+      (canvas.height - headerHeight - placement.world.designHeight * scale) / 2;
+    const zoneColors = ['#4b8bb8', '#b88746', '#a65353'];
+
+    function screenPoint(point) {
+      return {
+        x: offsetX + point.x * scale,
+        y: offsetY + point.y * scale,
+      };
+    }
+
+    context.fillStyle = '#e8eef7';
+    context.font = 'bold 23px sans-serif';
+    context.fillText(`Local government office — seed: ${seed}`, 28, 31);
+    context.fillStyle = '#9aa9bc';
+    context.font = '14px sans-serif';
+    context.fillText(
+      `${topology.metrics.roomCount} rooms · ${topology.metrics.loopCount} loops · ` +
+      `${topology.metrics.deadEndCount} dead ends · ${routing.metrics.bentRouteCount} bent routes · ` +
+      `${structure.doors.length} doors · ${structure.windows.length} windows · ` +
+      `${mission.enemies.spawns.length} enemies`,
+      28,
+      54
+    );
+
+    for (const routeSpace of routing.routeSpaces) {
+      const x = offsetX + routeSpace.interior.x * scale;
+      const y = offsetY + routeSpace.interior.y * scale;
+      const w = routeSpace.interior.w * scale;
+      const h = routeSpace.interior.h * scale;
+      context.fillStyle = routeSpace.spaceType === 'junction' ? '#596b7c' : '#3e4c5d';
+      context.fillRect(x, y, w, h);
+    }
+
+    for (const route of routing.routes) {
+      context.strokeStyle = route.routeType === 'loop' ? '#7ad0c3' :
+        route.routeType === 'branch' ? '#aa91dc' : '#99a9bd';
+      context.lineWidth = route.routeType === 'main' ? 3 : 2;
+      context.setLineDash(route.routeType === 'loop' ? [8, 6] : []);
+      context.beginPath();
+      route.points.forEach((point, index) => {
+        const screen = screenPoint(point);
+        if (index === 0) context.moveTo(screen.x, screen.y);
+        else context.lineTo(screen.x, screen.y);
+      });
+      context.stroke();
+    }
+    context.setLineDash([]);
+
+    for (const space of placement.spaces) {
+      const x = offsetX + space.interior.x * scale;
+      const y = offsetY + space.interior.y * scale;
+      const w = space.interior.w * scale;
+      const h = space.interior.h * scale;
+      context.fillStyle = `${zoneColors[space.securityZone] ?? '#667788'}cc`;
+      context.strokeStyle = space.startingSpace ? '#75ff9b' :
+        space.role === 'secure_office' ? '#ff7181' : '#d9e1ed';
+      context.lineWidth = space.startingSpace || space.role === 'secure_office' ? 4 : 2;
+      context.fillRect(x, y, w, h);
+      context.strokeRect(x, y, w, h);
+
+      const label = space.role.replaceAll('_', ' ');
+      const fontSize = Math.max(9, Math.min(14, w / Math.max(5, label.length * 0.58)));
+      context.fillStyle = '#ffffff';
+      context.font = `bold ${fontSize}px sans-serif`;
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(label, x + w / 2, y + h / 2, Math.max(30, w - 8));
+    }
+
+    for (const wall of structure.geometry.walls) {
+      context.fillStyle = '#d7dee8';
+      context.fillRect(
+        offsetX + wall.x * scale,
+        offsetY + wall.y * scale,
+        Math.max(1, wall.w * scale),
+        Math.max(1, wall.h * scale)
+      );
+    }
+    for (const door of structure.doors) {
+      context.fillStyle = door.material === 'metal' ? '#69c6d0' : '#d58a47';
+      context.fillRect(
+        offsetX + door.x * scale,
+        offsetY + door.y * scale,
+        Math.max(2, door.w * scale),
+        Math.max(2, door.h * scale)
+      );
+    }
+    const furnitureColors = {
+      wood: '#8f6543',
+      metal: '#74828a',
+      fabric: '#80745e',
+      ceramic: '#b8c4c0',
+    };
+    for (const item of mission.geometry.obstacles ?? []) {
+      context.fillStyle = furnitureColors[item.material] ?? furnitureColors.wood;
+      context.strokeStyle = item.blocksMovement === false ? '#c7d2d0' : '#1d2329';
+      context.lineWidth = item.blocksMovement === false ? 1 : 1.5;
+      context.fillRect(
+        offsetX + item.x * scale,
+        offsetY + item.y * scale,
+        Math.max(2, item.w * scale),
+        Math.max(2, item.h * scale)
+      );
+      context.strokeRect(
+        offsetX + item.x * scale,
+        offsetY + item.y * scale,
+        Math.max(2, item.w * scale),
+        Math.max(2, item.h * scale)
+      );
+    }
+    for (const windowSpec of structure.windows) {
+      context.fillStyle = '#79c8ff';
+      context.fillRect(
+        offsetX + windowSpec.x * scale,
+        offsetY + windowSpec.y * scale,
+        Math.max(2, windowSpec.w * scale),
+        Math.max(2, windowSpec.h * scale)
+      );
+    }
+    for (const entrance of structure.exteriorEntrances) {
+      const position = screenPoint(entrance.position);
+      context.fillStyle = entrance.primary ? '#75ff9b' : '#d6ef88';
+      context.beginPath();
+      context.arc(position.x, position.y, entrance.primary ? 7 : 5, 0, Math.PI * 2);
+      context.fill();
+    }
+
+    for (const lamp of mission.lighting.lamps) {
+      const position = screenPoint(lamp);
+      context.fillStyle = '#ffe199';
+      context.beginPath();
+      context.arc(position.x, position.y, 3.2, 0, Math.PI * 2);
+      context.fill();
+    }
+    for (const enemy of mission.enemies.spawns) {
+      const position = screenPoint(enemy);
+      context.fillStyle = enemy.archetype === 'shooter' ? '#ff665f' : '#ff9b56';
+      context.beginPath();
+      context.arc(position.x, position.y, 4.2, 0, Math.PI * 2);
+      context.fill();
+    }
+    const playerPosition = screenPoint(mission.player.start);
+    context.fillStyle = '#5ad5ff';
+    context.beginPath();
+    context.arc(playerPosition.x, playerPosition.y, 5.5, 0, Math.PI * 2);
+    context.fill();
+
+    const objectiveRoom = mission.rooms.find(
+      room => room.id === mission.objective.pickupRule.pickupRoomId
+    );
+    const objectivePosition = screenPoint(objectiveRoom.center);
+    context.fillStyle = '#ff67cc';
+    context.fillRect(objectivePosition.x - 5, objectivePosition.y - 5, 10, 10);
+
+    canvas.dataset.previewReady = 'true';
+    canvas.dataset.spaceCount = String(placement.spaces.length);
+  </script>
+</body>
+</html>

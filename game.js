@@ -37,6 +37,21 @@ const WALLS = ACTIVE_MISSION.geometry.walls.map(wall => ({
   projectileBehavior: 'block',
 }));
 
+const FURNITURE = (ACTIVE_MISSION.geometry.obstacles ?? []).map(obstacle => ({
+  ...scaleGameRect(obstacle),
+  id: obstacle.id,
+  roomId: obstacle.roomId,
+  kind: obstacle.kind,
+  material: obstacle.material,
+  blocksMovement: obstacle.blocksMovement !== false,
+  blocksSight: obstacle.blocksSight !== false,
+  blocksProjectiles: obstacle.blocksProjectiles !== false,
+  geometryId: obstacle.id,
+  geometryType: 'furniture',
+  destructible: false,
+  projectileBehavior: 'block',
+}));
+
 const DOOR_SPECS = ACTIVE_MISSION.doors.map(door => {
   const connector = ACTIVE_MISSION.connectors.find(item => item.id === door.connectorId);
   return { ...door, apertureIds: [...connector.apertureIds] };
@@ -230,7 +245,7 @@ function getIntactWindowRects() {
 }
 
 function getMovementBlockers() {
-  return WALLS.concat(getClosedDoorRects(), getIntactWindowRects());
+  return WALLS.concat(FURNITURE.filter(item => item.blocksMovement), getClosedDoorRects(), getIntactWindowRects());
 }
 
 function getMovementBlockerPolygons() {
@@ -240,7 +255,7 @@ function getMovementBlockerPolygons() {
 }
 
 function getRayBlockerRects() {
-  return WALLS.concat(getClosedDoorRects());
+  return WALLS.concat(FURNITURE.filter(item => item.blocksSight), getClosedDoorRects());
 }
 
 function rotateDoorPoint(x, y, angle) {
@@ -989,6 +1004,11 @@ function getProjectileCollision(projectile, x1, y1, x2, y2, actorTargets) {
     const hit = segmentRectIntersection(x1, y1, x2, y2, wall);
     if (hit) candidates.push({ ...hit, kind: 'geometry', target: wall });
   }
+  for (const furniture of FURNITURE) {
+    if (!furniture.blocksProjectiles) continue;
+    const hit = segmentRectIntersection(x1, y1, x2, y2, furniture);
+    if (hit) candidates.push({ ...hit, kind: 'geometry', target: furniture });
+  }
   for (const door of DOORS) {
     if (door.state === 'destroyed' || projectile.hitTargetIds.has(door.id)) continue;
     const hit = segmentPolygonIntersection(x1, y1, x2, y2, getDoorPanelCorners(door));
@@ -1363,6 +1383,56 @@ function drawWalls() {
   }
 }
 
+function drawFurniture() {
+  const palette = {
+    wood: { fill: '#62452f', stroke: '#9a7048' },
+    metal: { fill: '#4c5960', stroke: '#84939a' },
+    fabric: { fill: '#665f50', stroke: '#9a8d74' },
+    ceramic: { fill: '#8c9694', stroke: '#c2cfcc' },
+  };
+  const lowKinds = new Set([
+    'waiting_chair', 'visitor_chair', 'meeting_chair', 'chair',
+    'low_table', 'paper_cart', 'break_table',
+  ]);
+  const drawerKinds = new Set([
+    'filing_cabinet', 'archive_bank', 'storage_shelf', 'equipment_cabinet',
+  ]);
+  for (const item of FURNITURE) {
+    const colors = palette[item.material] ?? palette.wood;
+    ctx.fillStyle = colors.fill;
+    ctx.strokeStyle = colors.stroke;
+    ctx.lineWidth = scaleGameUnit(lowKinds.has(item.kind) ? 1 : 2);
+    ctx.fillRect(item.x, item.y, item.w, item.h);
+    ctx.strokeRect(item.x, item.y, item.w, item.h);
+
+    if (drawerKinds.has(item.kind)) {
+      ctx.strokeStyle = 'rgba(205,218,220,0.42)';
+      const horizontal = item.w >= item.h;
+      const divisions = Math.max(2, Math.min(5, Math.floor((horizontal ? item.w : item.h) / scaleGameUnit(22))));
+      for (let index = 1; index < divisions; index++) {
+        const fraction = index / divisions;
+        ctx.beginPath();
+        if (horizontal) {
+          ctx.moveTo(item.x + item.w * fraction, item.y);
+          ctx.lineTo(item.x + item.w * fraction, item.y + item.h);
+        } else {
+          ctx.moveTo(item.x, item.y + item.h * fraction);
+          ctx.lineTo(item.x + item.w, item.y + item.h * fraction);
+        }
+        ctx.stroke();
+      }
+    } else if (item.kind.includes('chair')) {
+      ctx.fillStyle = 'rgba(18,20,21,0.46)';
+      const inset = scaleGameUnit(5);
+      ctx.fillRect(item.x + inset, item.y + inset, Math.max(1, item.w - inset * 2), Math.max(1, item.h - inset * 2));
+    } else if (item.kind.includes('desk') || item.kind.includes('counter') || item.kind.includes('table')) {
+      ctx.strokeStyle = 'rgba(224,194,145,0.35)';
+      const inset = scaleGameUnit(5);
+      ctx.strokeRect(item.x + inset, item.y + inset, Math.max(1, item.w - inset * 2), Math.max(1, item.h - inset * 2));
+    }
+  }
+}
+
 function drawWindows() {
   for (const windowGeometry of WINDOWS) {
     if (windowGeometry.state === 'open') continue;
@@ -1519,6 +1589,10 @@ function drawMapGeometry() {
   ctx.fillStyle = '#6a7080'; // cool grey-blue schematic overlay — distinct from lit walls (#4a4a4a)
   for (const wall of WALLS) {
     ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+  }
+  ctx.fillStyle = '#8a735a';
+  for (const item of FURNITURE) {
+    ctx.fillRect(item.x, item.y, item.w, item.h);
   }
   ctx.restore();
 }
@@ -1854,6 +1928,7 @@ function draw() {
   drawFloor();
   drawWalls();
   drawWindows();
+  drawFurniture();
   drawDoors();
   drawCorpses();
   drawLamps();

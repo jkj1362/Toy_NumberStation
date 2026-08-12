@@ -1414,6 +1414,19 @@ function pawnInCone(ex, ey, eAngle, visionAngle, tx, ty) {
 
 // Single ray from (x1,y1) toward (x2,y2); true if no wall is closer than the target
 function hasLOS(x1, y1, x2, y2) {
+  if (typeof getRayBlockerRects === 'function' && typeof segmentRectIntersection === 'function') {
+    for (const blocker of getRayBlockerRects()) {
+      const hit = segmentRectIntersection(x1, y1, x2, y2, blocker);
+      if (hit && hit.t > 0.0001 && hit.t < 0.9999) return false;
+    }
+    if (typeof getRayBlockerPolygons === 'function' && typeof segmentPolygonIntersection === 'function') {
+      for (const polygon of getRayBlockerPolygons()) {
+        const hit = segmentPolygonIntersection(x1, y1, x2, y2, polygon);
+        if (hit && hit.t > 0.0001 && hit.t < 0.9999) return false;
+      }
+    }
+    return true;
+  }
   const angle = Math.atan2(y2 - y1, x2 - x1);
   const hit = castVisRay(x1, y1, angle);
   if (!hit) return true;
@@ -2705,9 +2718,27 @@ function drawEnemySightCone(e) {
   ctx.restore();
 }
 
+function enemySightDebugMayReachViewport(e) {
+  if (typeof camera === 'undefined' ||
+      typeof VIEWPORT_WIDTH === 'undefined' ||
+      typeof VIEWPORT_HEIGHT === 'undefined') return true;
+
+  // Visibility polygons are intentionally unbounded until they hit geometry, so
+  // constructing them for guards on the far side of a large generated facility
+  // is disproportionately expensive.  A one-viewport margin keeps approaching
+  // cones visible before their owners enter the screen without raycasting every
+  // off-screen guard on every frame.
+  const margin = Math.max(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+  return e.x >= camera.x - margin &&
+    e.x <= camera.x + VIEWPORT_WIDTH + margin &&
+    e.y >= camera.y - margin &&
+    e.y <= camera.y + VIEWPORT_HEIGHT + margin;
+}
+
 function drawEnemies() {
   if (showEnemySightDebug()) {
     for (const e of enemies) {
+      if (!enemySightDebugMayReachViewport(e)) continue;
       drawEnemySightCone(e);
     }
   }

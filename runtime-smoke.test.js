@@ -48,7 +48,7 @@ function createCanvas(width = 1920, height = 1080) {
   return canvas;
 }
 
-function loadRuntime(useReference) {
+function loadRuntime(useReference, generationConfig = null) {
   const displayedCanvas = createCanvas();
   const documentStub = {
     readyState: 'loading',
@@ -87,6 +87,7 @@ function loadRuntime(useReference) {
     Set,
     Math,
     MISSION_USE_REFERENCE: useReference,
+    MISSION_GENERATION_CONFIG_OVERRIDE: generationConfig,
   });
 
   for (const file of [
@@ -298,6 +299,98 @@ assert.equal(generatedReset.definition, generatedDefinitionBeforeReset);
 
 vm.runInContext('loop(0); loop(16.6667); loop(33.3334);', generatedContext);
 
-console.log('Reference and generated runtime smoke checks passed.');
+const irregularContext = loadRuntime(false, { profileId: 'local_government_office' });
+const irregularInitial = JSON.parse(vm.runInContext(`JSON.stringify({
+  seed: CURRENT_RUN.seed,
+  generated: CURRENT_RUN.generated,
+  generationKind: ACTIVE_MISSION.generation.kind,
+  profileId: ACTIVE_MISSION.generation.profileId,
+  authoredRoomCount: ACTIVE_MISSION.rooms.filter(room => room.spaceType === 'room').length,
+  routeSpaceCount: ACTIVE_MISSION.rooms.filter(room => room.spaceType !== 'room').length,
+  wallCount: WALLS.length,
+  furnitureCount: FURNITURE.length,
+  doorCount: DOORS.length,
+  windowCount: WINDOWS.length,
+  entranceCount: ACTIVE_MISSION.objective.exfilPoints.length,
+  lampCount: lightingLamps.length,
+  enemyCount: enemies.length,
+  navNodeCount: Object.keys(NAV_NODES).length,
+  navEdgeCount: NAV_EDGES.length,
+  soundRoomCount: SOUND_ROOM_SPECS.length,
+  soundPortalCount: SOUND_PORTAL_SPECS.length,
+  unresolvedAuthoredSoundCenters: ACTIVE_MISSION.rooms
+    .filter(room => room.spaceType === 'room')
+    .filter(room => findSoundRoomAt(scaleGameX(room.center.x), scaleGameY(room.center.y))?.id !== room.id)
+    .map(room => ({
+      id: room.id,
+      resolvedId: findSoundRoomAt(scaleGameX(room.center.x), scaleGameY(room.center.y))?.id ?? null,
+    })),
+  pickupRoomId: pickup.roomId,
+  authoredPickupRoomId: ACTIVE_MISSION.objective.pickupRule.pickupRoomId,
+  playerStart: { x: player.x, y: player.y },
+  authoredPlayerStart: {
+    x: scaleGameX(ACTIVE_MISSION.player.start.x),
+    y: scaleGameY(ACTIVE_MISSION.player.start.y),
+  },
+  definitionFrozen: Object.isFrozen(ACTIVE_MISSION) && Object.isFrozen(ACTIVE_MISSION.rooms[0]),
+  archiveConnectorCount: ACTIVE_MISSION.connectors.filter(connector =>
+    connector.rooms.includes(ACTIVE_MISSION.rooms.find(room => room.role === 'records_archive').id)
+  ).length,
+  archiveHasWindow: ACTIVE_MISSION.windows.some(windowSpec => {
+    const connector = ACTIVE_MISSION.connectors.find(item => item.id === windowSpec.connectorId);
+    return connector.rooms.includes(ACTIVE_MISSION.rooms.find(room => room.role === 'records_archive').id);
+  }),
+})`, irregularContext));
+
+assert.equal(irregularInitial.seed, 'prototype-2');
+assert.equal(irregularInitial.generated, true);
+assert.equal(irregularInitial.generationKind, 'seeded_irregular');
+assert.equal(irregularInitial.profileId, 'local_government_office');
+assert.ok(irregularInitial.authoredRoomCount >= 10);
+assert.ok(irregularInitial.routeSpaceCount >= 1);
+assert.ok(irregularInitial.wallCount >= 20);
+assert.ok(irregularInitial.furnitureCount >= irregularInitial.authoredRoomCount * 2);
+assert.ok(irregularInitial.doorCount >= irregularInitial.authoredRoomCount);
+assert.equal(irregularInitial.windowCount, 3);
+assert.ok(irregularInitial.entranceCount >= 1 && irregularInitial.entranceCount <= 2);
+assert.ok(irregularInitial.lampCount >= 10 && irregularInitial.lampCount <= 16);
+assert.ok(irregularInitial.enemyCount >= 7 && irregularInitial.enemyCount <= 12);
+assert.ok(irregularInitial.navNodeCount > irregularInitial.authoredRoomCount);
+assert.ok(irregularInitial.navEdgeCount >= irregularInitial.doorCount);
+assert.ok(irregularInitial.soundRoomCount >= irregularInitial.authoredRoomCount);
+assert.ok(irregularInitial.soundPortalCount >= irregularInitial.doorCount);
+assert.deepEqual(irregularInitial.unresolvedAuthoredSoundCenters, []);
+assert.equal(irregularInitial.pickupRoomId, irregularInitial.authoredPickupRoomId);
+assert.deepEqual(irregularInitial.playerStart, irregularInitial.authoredPlayerStart);
+assert.equal(irregularInitial.definitionFrozen, true);
+assert.equal(irregularInitial.archiveConnectorCount, 1);
+assert.equal(irregularInitial.archiveHasWindow, false);
+
+const irregularDefinitionBeforeReset = vm.runInContext('JSON.stringify(ACTIVE_MISSION)', irregularContext);
+vm.runInContext(`
+  DOORS[0].state = 'destroyed';
+  WINDOWS[0].state = 'destroyed';
+  lightingLamps[0].active = false;
+  gapExits[0].activated = true;
+  reset();
+`, irregularContext);
+const irregularReset = JSON.parse(vm.runInContext(`JSON.stringify({
+  doorState: DOORS[0].state,
+  windowState: WINDOWS[0].state,
+  lampActive: lightingLamps[0].active,
+  gapExitActive: gapExits[0].activated,
+  pickupRoomId: pickup.roomId,
+  definition: JSON.stringify(ACTIVE_MISSION),
+})`, irregularContext));
+assert.equal(irregularReset.doorState, 'closed');
+assert.equal(irregularReset.windowState, 'intact');
+assert.equal(irregularReset.lampActive, true);
+assert.equal(irregularReset.gapExitActive, false);
+assert.equal(irregularReset.pickupRoomId, irregularInitial.authoredPickupRoomId);
+assert.equal(irregularReset.definition, irregularDefinitionBeforeReset);
+
+vm.runInContext('loop(0); loop(16.6667); loop(33.3334);', irregularContext);
+
+console.log('Reference, grid-generated, and irregular-office runtime smoke checks passed.');
 
 module.exports = { loadRuntime };

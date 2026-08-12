@@ -1,6 +1,6 @@
 # Feature 15 - Mission Data Separation and Seeded Procedural Runs
 
-**Status: Phase 15A and the Phase 15B-I seeded-grid contract proof are implemented. Phase 15B-II irregular single-floor facility generation is the next implementation work. Feature 16 follows only after irregular generated topology is stable enough to exercise connected-space escalation without overfitting to a grid.**
+**Status: Phase 15A and Phase 15B-I are implemented. The local-government-office Phase 15B-II path through reference-informed room dressing is implemented: irregular topology, placement, routing, geometry, subsystem compilation, gameplay content, deterministic furnishing, complete validation, and bounded retries produce a playable mission. Step 10 still needs broader multi-seed and scale-envelope review before the profile is treated as content-complete. Feature 16 follows only after irregular generated topology is stable enough to exercise connected-space escalation without overfitting to a grid.**
 
 Feature 15 is split into completed data separation, a completed grid-based generator proof, and an irregular single-floor generation pass:
 
@@ -130,6 +130,54 @@ This work belongs before Feature 16. Facility escalation will select connected r
 
 The current `3 x 3` generator becomes the `tutorial_grid` profile and remains a regression fixture. Production profiles must be topology-first and must not expose rows or columns as architectural concepts. A hidden coarse occupancy lattice may still be used internally for packing, collision checks, or corridor routing, provided the generated mission definition and visible facility are irregular.
 
+### Implementation State
+
+Implemented on 2026-08-10:
+
+- `FACILITY_PROFILES` registers the aligned `tutorial_grid` and the first irregular `local_government_office` profile through stable IDs and generation versions.
+- Profile normalization validates architectural ranges, security-zone counts, corridor/generator kinds, and normalized small/medium/large room weights before generation begins.
+- Tutorial grid rooms now expose `spaceType: 'room'` and `roomSize: 'medium'` while retaining their existing grid metadata for tutorial/regression use.
+- Generated tutorial mission metadata records its profile ID, generation version, and normalized profile without changing the accepted `3 x 3` layout or runtime behavior.
+- `generateIrregularFacilityTopology()` creates a deterministic, geometry-free graph from the office profile. It produces room, corridor, and checkpoint/junction nodes; a required entry-to-objective backbone; bounded branches, dead ends, and loops; security-zone ownership; objective-compatible spaces; and explicit connector-degree limits without row/column output.
+- Automated coverage validates 100 irregular office topology seeds for determinism, identity, immutability, connectivity, required-route adjacency, profile ranges, loop/dead-end counts, checkpoint counts, security zones, and degree limits. Existing grid, parity, runtime-smoke, reset, and enemy-crowding regressions remain green.
+- Profile dispatch remains explicit: `tutorial_grid` is the default regression/tutorial mission, while production profiles select their own generator implementation through the same mission boundary.
+
+Continued on 2026-08-12:
+
+- `SPACE_MODULES` now registers small, medium, and large room ranges plus straight-corridor and checkpoint/junction primitives with stable IDs, dimensional ranges, rotation policy, and placement clearance.
+- `FACILITY_SPACE_PROFILES` supplies the approved local-government-office brief: reception/lobby, public-service area, two-to-four staff offices, records/archive, service/storage, secure antechamber, secure office, and weighted meeting-room, permit-office, break-room, restroom, and utility-room options.
+- `MOTIF_LIBRARY` registers the reusable reception/checkpoint, office-cluster, secure-antechamber, storage/service-branch, side-branch, right-angle-bend, and maintenance-loop concepts. The office profile requires the first three and expresses the remaining motifs as weighted preferences.
+- Profile validation rejects unknown module, space-profile, and motif IDs; invalid count capacities; invalid weights; and irregular facilities without exactly one authored starting space or a mandatory objective-compatible space.
+- Abstract office topology now instantiates authored semantic rooms instead of placeholder `public` / `office` / `restricted` roles. Required reception/checkpoint, staff-office/circulation, and secure-antechamber/secure-office adjacency is recorded and validated per seed.
+- `placeIrregularFacilitySpaces()` deterministically sizes and rotates registered modules, places spaces outward through graph adjacency, enforces module clearances, and translates the result into positive design-space bounds without exposing row or column coordinates.
+- `mission-placement-preview.html` renders the current topology and placement for visual development review while explicitly distinguishing planned graph connections from future routed corridors. Representative 10-room and 16-room seeds were visually confirmed to use variable sizes, offsets, branches, and non-table-like footprints.
+- The automated office batch now validates both topology and placement across 100 seeds, including mandatory-space counts, required motif adjacency, module dimensions, positive bounds, per-space clearance, identity, determinism, and horizontal/vertical irregularity.
+
+Continued on 2026-08-12 after placement approval:
+
+- `routeIrregularFacilityConnections()` deterministically selects wall sockets and routes every graph edge through straight or orthogonal multi-segment paths. Routes avoid unrelated room interiors, and bends or compatible route intersections materialize as stable corridor/junction spaces instead of accidental crossings.
+- `compileIrregularFacilityStructure()` derives continuous union-boundary walls, internal doors/open passages, one-to-two exterior entrances, three exterior windows, breakable window exits, lighting apertures, navigation nodes/edges, and sound rooms/portals from the same spaces and connectors.
+- The complete office mission now places the player in reception, the objective in the secure office, exfil points at generated exterior entrances, one wall-mounted lamp per authored room, and seven-to-twelve profile-controlled enemies with spaced spawns and local or cross-space patrols.
+- Lamps are selected only from compiled solid wall spans after doors, windows, and entrances are cut. Enemy spawns retain personal space, and patrol points are checked against compiled wall geometry.
+- `generateSeededMission(seed, { profileId: 'local_government_office' })` now returns an immutable `seeded_irregular` mission through the existing runtime contract. The playable development URL is `?profile=local_government_office`; omitting the profile keeps `tutorial_grid` as the default.
+- `validateIrregularMissionDefinition()` checks identity, world bounds, stable IDs, space reachability, objective/exfil placement, connector ownership, wall openings, lamp mounting, enemy clearance, navigation references, and sound ownership before a mission can load.
+- Failed irregular attempts use a deterministic attempt seed derived from the run seed, retry at most four times, and surface one clear generation error rather than returning partial output. Run identity retains the original seed and records the accepted attempt number and attempt seed.
+- Automated generation now covers 100 complete office missions in addition to 100 tutorial-grid missions. Reference parity, runtime load/reset/frame execution, and enemy-crowding regressions pass with the irregular office enabled.
+- `mission-placement-preview.html` now renders routed spaces, walls, doors, windows, entrances, lamps, enemies, player start, and objective for deterministic seed review. Representative compact, branching, sparse, and default office structures have been inspected; the required ten-seed interactive Step 10 review remains open.
+
+Continued on 2026-08-12 after visual-reference approval:
+
+- The local-office profile is now generation version `2`. The approved generated reception, public-service, secure-antechamber, and archive concepts complement the supplied photographic references; people in all references are scale indicators only and do not request civilian occupants.
+- `generateLocalGovernmentOfficeFurnishings()` deterministically dresses every authored room role with appropriate counters, desks, chairs, filing/storage banks, partitions, tables, carts, restroom fixtures, or utility equipment. Placement reserves connector approaches and center-to-connector circulation lanes and rejects wall, opening, or furniture overlap.
+- Furniture uses normalized obstacle records with independent movement, sight/light, and projectile-blocking flags. Runtime collision and ballistics consume all blocking furniture, while only tall cabinets, archive banks, shelves, boards, and partitions become full-height ray blockers.
+- The archive is a terminal room with exactly one internal entrance, no exterior window, at least two filing banks, and exactly one clerk desk. These constraints are enforced both while selecting exterior connectors and in complete mission validation.
+- Enemy spawns and patrol points are relocated away from furniture and preserve same-room personal space. The complete validator also verifies furnishing identity, room ownership, bounds, geometry clearance, actor clearance, and patrol clearance before a mission can load.
+- Off-screen enemy sight-cone debug polygons are culled with a one-viewport safety margin, retaining advance visual warning while avoiding facility-wide raycasting every frame on large generated plans.
+- Automated regression now asserts furnished-room coverage and archive/access constraints across 100 tutorial and 100 irregular office seeds. The playable review URL is `?profile=local_government_office&seed=prototype-2`.
+- `Open Game.bat` now launches that reviewed local-office seed for the active development playtest. `Open Tutorial.bat` preserves direct access to the aligned tutorial profile.
+
+The first visual-reference boundary has been crossed for the local office: supplied photographs and approved generated concepts now drive spatial furnishing rules. Later references can refine finishes, props, clutter density, corridor identity, and optional support rooms by replacing or extending role modules without changing topology generation. Each intentional compatibility-breaking profile or module change increments the facility generation version.
+
 ### Architectural Model
 
 Generation proceeds in this ownership order:
@@ -208,6 +256,8 @@ Each facility is authored as data assembled from three independently extensible 
 - **Facility profiles** select mandatory spaces, allowed modules, motif requirements and weights, circulation rules, scale, security, and population. A new facility should normally be added as a new profile, not as a branch in the generator.
 
 The compiled mission remains a normalized collection of spaces and connectors. Runtime gameplay systems consume that output and do not depend on which module, motif, or facility profile produced it.
+
+Facility briefs and their visual references live under `Level Reference/<Facility>/`. Each active facility folder owns a `LEVEL_PROFILE.md` containing its human-readable profile, current implementation values, reference catalog, unresolved decisions, and requested references. `Level Reference/README.md` defines the shared authoring workflow. The runtime registry remains the implemented source, while the per-facility profile makes differences between desired design and current code explicit.
 
 #### Information required for each new facility
 
